@@ -1,0 +1,45 @@
+.DS_Store
+
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+coverage.*
+htmlcov/
+
+# Type checking / linting caches
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+.cache/
+
+# IDE / editor settings
+.vscode/
+.idea/
+
+# Notebooks and data artifacts
+.ipynb_checkpoints
+*.log
+runs/
+
+# Environment files
+.env
+.env.*
+.envrc
