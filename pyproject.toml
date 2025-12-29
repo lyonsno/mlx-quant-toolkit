@@ -1,7 +1,7 @@
 [project]
-name = "custom-quant"
+name = "mlx-quant-toolkit"
 version = "0.1.0"
-description = "Add your description here"
+description = "The rationalist's loadout for intelligent mlx quantization"
 readme = "README.md"
 requires-python = ">=3.12.9"
 dependencies = [

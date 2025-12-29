@@ -82,31 +82,6 @@ wheels = [
 ]
 
 [[package]]
-name = "custom-quant"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "ml-dtypes" },
-    { name = "mlx" },
-    { name = "mlx-lm" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "pyarrow" },
-    { name = "safetensors" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "ml-dtypes", specifier = ">=0.5.4" },
-    { name = "mlx", specifier = ">=0.30.0" },
-    { name = "mlx-lm", specifier = ">=0.28.4" },
-    { name = "numpy", specifier = ">=2.3.5" },
-    { name = "pandas", specifier = ">=2.3.3" },
-    { name = "pyarrow", specifier = ">=22.0.0" },
-    { name = "safetensors", specifier = ">=0.7.0" },
-]
-
-[[package]]
 name = "filelock"
 version = "3.20.0"
 source = { registry = "https://pypi.org/simple" }
@@ -343,6 +318,31 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/64/9f/47ebb6e9b2c33371c6ca3733e70324ed064f49e790ee4e194b713d6d7d84/mlx_metal-0.30.0-py3-none-macosx_14_0_arm64.whl", hash = "sha256:f48543b10d13bf0591b3f99c6eb585dd2c2e5db379edae5df0f19a728cb41742", size = 36819863, upload-time = "2025-11-20T06:42:23.927Z" },
     { url = "https://files.pythonhosted.org/packages/7f/91/c04e420326390c37d4c13f58960956d698cd34c7432ae3860bc5c6be71a0/mlx_metal-0.30.0-py3-none-macosx_15_0_arm64.whl", hash = "sha256:74bb5d10e0f24e21973d39430557bbd5d733c2a6599c3f1b87f9a0ff73fed2c8", size = 36817633, upload-time = "2025-11-20T01:16:27.77Z" },
     { url = "https://files.pythonhosted.org/packages/86/18/7af11eac0f488b68c436d249ffcf4f76003326e691994db3f720d21f21bb/mlx_metal-0.30.0-py3-none-macosx_26_0_arm64.whl", hash = "sha256:310fda8b2f7345865f3dd75a9b478e974f28d22e8ebf05f26af5adc0e8979cee", size = 44878409, upload-time = "2025-11-20T05:33:20.221Z" },
+]
+
+[[package]]
+name = "mlx-quant-toolkit"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "ml-dtypes" },
+    { name = "mlx" },
+    { name = "mlx-lm" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "pyarrow" },
+    { name = "safetensors" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "ml-dtypes", specifier = ">=0.5.4" },
+    { name = "mlx", specifier = ">=0.30.0" },
+    { name = "mlx-lm", specifier = ">=0.28.4" },
+    { name = "numpy", specifier = ">=2.3.5" },
+    { name = "pandas", specifier = ">=2.3.3" },
+    { name = "pyarrow", specifier = ">=22.0.0" },
+    { name = "safetensors", specifier = ">=0.7.0" },
 ]
 
 [[package]]
