@@ -18,6 +18,7 @@ import re
 import time
 import warnings
 from dataclasses import dataclass
+from numbers import Integral
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -182,13 +183,36 @@ def _infer_proj(name: str, alias_map: Dict[str, List[str]]) -> Optional[str]:
 
 
 def _split_along_axis(x: np.ndarray, axis: int, splits: List[int]) -> List[np.ndarray]:
+    if not isinstance(axis, Integral):
+        raise ValueError(f"axis must be an int; got {type(axis).__name__}")
+    if axis < 0:
+        axis += x.ndim
+    if axis < 0 or axis >= x.ndim:
+        raise ValueError(f"axis {axis} is out of bounds for ndim={x.ndim}")
+
+    splits_list = list(splits)
+    if not splits_list:
+        raise ValueError("splits must be non-empty")
+
+    total = 0
+    for s in splits_list:
+        if not isinstance(s, Integral):
+            raise ValueError(f"split sizes must be integers; got {type(s).__name__}")
+        if s <= 0:
+            raise ValueError(f"split sizes must be positive; got {s}")
+        total += int(s)
+
+    axis_len = x.shape[axis]
+    if total != axis_len:
+        raise ValueError(f"split sizes sum to {total}, expected {axis_len} along axis {axis}")
+
     outs = []
     start = 0
-    for s in splits:
+    for s in splits_list:
         sl = [slice(None)] * x.ndim
-        sl[axis] = slice(start, start + s)
+        sl[axis] = slice(start, start + int(s))
         outs.append(x[tuple(sl)])
-        start += s
+        start += int(s)
     return outs
 
 
