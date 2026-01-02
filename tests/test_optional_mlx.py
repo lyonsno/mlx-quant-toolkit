@@ -70,6 +70,10 @@ class OptionalMlxPipelineTests(unittest.TestCase):
         cfg = json.loads(cfg_path.read_text())
         cfg["output"]["format"] = "csv"
         cfg["output"]["compression"] = None
+        # Explicit delta_pairs override so test does not depend on init_run.py defaults
+        cfg["delta_pairs"] = [
+            {"name": "dummy_delta", "a": "scheme_a", "b": "scheme_b"}
+        ]
         cfg_path.write_text(json.dumps(cfg, indent=2))
 
         stub_root = self._create_stub_mlx(tmp_path)
