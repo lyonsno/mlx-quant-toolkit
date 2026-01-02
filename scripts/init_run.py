@@ -32,7 +32,8 @@ DEFAULT_CONFIG = {
       "up_proj":   ["up_proj",   "w3", ".up.",   "ffn_up"]
     },
 
-    "shared_expert_keywords": ["shared", "expert"]
+    "shared_expert_keywords": ["shared", "expert"],
+    "strict_packed_split": True
   },
 
   "extract_rules": [

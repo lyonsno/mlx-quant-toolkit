@@ -140,6 +140,10 @@ class Rule:
     packed_split: Optional[Dict[str, Any]]
 
 
+class PackedSplitError(RuntimeError):
+    pass
+
+
 def _compile_rules(cfg: Dict[str, Any]) -> List[Rule]:
     out: List[Rule] = []
     for r in cfg.get("extract_rules", []):
@@ -329,9 +333,14 @@ def _apply_rules(
             raise ValueError(f"Unsupported canonical ndim={canon.ndim}")
 
         split_axis = rows_i if axis_kind == "rows" else cols_i
-        parts = _split_along_axis(canon, split_axis, splits)
+        try:
+            parts = _split_along_axis(canon, split_axis, splits)
+        except Exception as e:
+            msg = f"packed_split failed for rule={r.name} tensor={name}: {e}"
+            raise PackedSplitError(msg) from e
         if len(parts) != len(proj_list):
-            raise ValueError("packed_split projs and splits length mismatch")
+            msg = f"packed_split projs and splits length mismatch for rule={r.name} tensor={name}"
+            raise PackedSplitError(msg)
 
         banks: List[ExtractedBank] = []
         for proj, part in zip(proj_list, parts):
@@ -653,6 +662,7 @@ def main():
     expert_re = re.compile(parsing["expert_regex"])
     alias_map = parsing["proj_aliases"]
     shared_keywords = parsing.get("shared_expert_keywords", ["shared", "expert"])
+    strict_packed_split = bool(parsing.get("strict_packed_split", True))
 
     rules = _compile_rules(cfg)
 
@@ -725,7 +735,20 @@ def main():
             # try explicit rules, else fallback heuristics
             extracted = None
             try:
-                extracted = _apply_rules(name, arr, fpath, rules, layer_re, expert_re, alias_map, shared_keywords)
+                extracted = _apply_rules(
+                    name,
+                    arr,
+                    fpath,
+                    rules,
+                    layer_re,
+                    expert_re,
+                    alias_map,
+                    shared_keywords,
+                )
+            except PackedSplitError as e:
+                if strict_packed_split:
+                    raise
+                warn_log.append(f"[extract] {e}")
             except Exception as e:
                 warn_log.append(f"[extract] rule application failed for {name}: {e}")
 
