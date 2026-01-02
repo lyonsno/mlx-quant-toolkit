@@ -16,6 +16,7 @@ import json
 import os
 import re
 import time
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -442,6 +443,22 @@ def _per_expert_weight_stats(bank: np.ndarray, cfg_stats: Dict[str, Any], cache_
     return stats
 
 
+QUANT_SIM_COLUMNS = [
+    "scheme",
+    "mode",
+    "bits",
+    "group_size",
+    "expert_id_in_bank",
+    "w_rel_fro",
+    "w_rel_max",
+    "scale_mean",
+    "scale_max",
+    "bias_mean",
+    "bias_max",
+    "error",
+]
+
+
 def _mlx_quant_sim(
     bank: np.ndarray,
     schemes: List[Dict[str, Any]],
@@ -456,7 +473,9 @@ def _mlx_quant_sim(
     warns: List[str] = []
 
     if mx is None:
-        raise RuntimeError("mlx is not importable but mlx quant_schemes are enabled")
+        msg = "mlx is not importable; skipping quantization simulation"
+        warnings.warn(msg)
+        return pd.DataFrame(columns=QUANT_SIM_COLUMNS), [msg]
 
     if device == "cpu":
         try:
@@ -631,6 +650,12 @@ def main():
     quant_rows: List[Dict[str, Any]] = []
     unmatched_rows: List[Dict[str, Any]] = []
     warn_log: List[str] = []
+
+    if mlx_enabled and schemes and mx is None:
+        msg = "mlx is not importable; skipping quantization simulations"
+        warnings.warn(msg)
+        warn_log.append(f"[quant_sim] {msg}")
+        mlx_enabled = False
 
     files = list(_iter_weight_files(model_path, exts))
     files.sort()
@@ -815,7 +840,22 @@ def main():
 
     inv_df = pd.DataFrame(inventory_rows)
     ms_df = pd.DataFrame(matrix_rows)
-    qs_df = pd.DataFrame(quant_rows)
+    if quant_rows:
+        qs_df = pd.DataFrame(quant_rows)
+    else:
+        qs_df = pd.DataFrame(columns=[
+            "file",
+            "source_tensor",
+            "derived_tensor",
+            "layer",
+            "block4",
+            "proj",
+            "expert_id",
+            "is_shared_expert",
+            "rows",
+            "cols",
+            *QUANT_SIM_COLUMNS,
+        ])
     um_df = pd.DataFrame(unmatched_rows) if unmatched_rows else pd.DataFrame()
     wl_df = pd.DataFrame({"warning": warn_log}) if warn_log else pd.DataFrame()
 
