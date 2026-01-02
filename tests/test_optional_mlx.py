@@ -1,3 +1,4 @@
+import csv
 import io
 import json
 import os
@@ -29,6 +30,26 @@ class OptionalMlxPipelineTests(unittest.TestCase):
         (pkg_dir / "core.py").write_text("raise ImportError('stub mlx not available')\n")
         return stub_root
 
+    def _create_stub_mlx_quantize_fail(self, root: Path) -> Path:
+        stub_root = root / "stub_mlx_quantize_fail"
+        pkg_dir = stub_root / "mlx"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+        (pkg_dir / "__init__.py").write_text("")
+        (pkg_dir / "core.py").write_text(
+            "def array(x):\n"
+            "    return x\n"
+            "\n"
+            "def quantize(*_args, **_kwargs):\n"
+            "    raise RuntimeError('stub quantize fail')\n"
+            "\n"
+            "def set_default_device(_device):\n"
+            "    return None\n"
+            "\n"
+            "cpu = object()\n"
+            "gpu = object()\n"
+        )
+        return stub_root
+
     def _run(self, args, env=None):
         return subprocess.run(
             args,
@@ -39,7 +60,7 @@ class OptionalMlxPipelineTests(unittest.TestCase):
             text=True,
         )
 
-    def _setup_and_collect(self, tmp_path: Path):
+    def _setup_and_collect(self, tmp_path: Path, stub_factory=None, cfg_overrides=None):
         model_dir = tmp_path / "model"
         model_dir.mkdir(parents=True, exist_ok=True)
         arr = np.arange(32, dtype=np.float32).reshape(2, 4, 4)
@@ -74,9 +95,14 @@ class OptionalMlxPipelineTests(unittest.TestCase):
         cfg["delta_pairs"] = [
             {"name": "dummy_delta", "a": "scheme_a", "b": "scheme_b"}
         ]
+        if cfg_overrides:
+            for key, value in cfg_overrides.items():
+                cfg[key] = value
         cfg_path.write_text(json.dumps(cfg, indent=2))
 
-        stub_root = self._create_stub_mlx(tmp_path)
+        if stub_factory is None:
+            stub_factory = self._create_stub_mlx
+        stub_root = stub_factory(tmp_path)
         env = os.environ.copy()
         env["PYTHONPATH"] = str(stub_root) + os.pathsep + env.get("PYTHONPATH", "")
         env["PYTHONWARNINGS"] = "default"
@@ -119,6 +145,36 @@ class OptionalMlxPipelineTests(unittest.TestCase):
             self.assertTrue((run_dir / "tables" / "A_weight_global_summary.csv").exists())
             self.assertTrue((run_dir / "tables" / "B_quant_global_summary.csv").exists())
             self.assertTrue((run_dir / "tables" / "B_quant_deltas.csv").exists())
+
+    def test_collect_data_with_mlx_quantize_failure_emits_error_message(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir, _, _ = self._setup_and_collect(
+                Path(tmp_dir),
+                stub_factory=self._create_stub_mlx_quantize_fail,
+                cfg_overrides={
+                    "mlx": {"enabled": True, "device": "cpu"},
+                    "quant_schemes": [
+                        {
+                            "name": "s1",
+                            "mode": "symmetric",
+                            "bits": 4,
+                            "group_size": 32,
+                            "enabled": True,
+                        }
+                    ],
+                },
+            )
+
+            quant_path = run_dir / "data" / "quant_sim.csv"
+            self.assertTrue(quant_path.exists())
+
+            with quant_path.open(newline="") as handle:
+                reader = csv.DictReader(handle)
+                rows = list(reader)
+
+            self.assertGreaterEqual(len(rows), 2)
+            for row in rows:
+                self.assertIn("stub quantize fail", row.get("error", ""))
 
 
 if __name__ == "__main__":
