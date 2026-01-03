@@ -44,6 +44,11 @@ Your job as an agent: make small, correct, test-backed changes quickly, without 
 4. **Avoid “tests that merely look good.”**
    - Don’t write vacuous/self-passing tests (e.g., only checking a file exists).
    - Prefer asserting concrete invariants: shapes, columns, row counts, warnings/errors emitted, numeric identities on tiny examples.
+   - Use this checklist whenever applicable.
+   	•	Does this test assert row counts (not just file existence)?
+	•	Does it assert key columns and at least one meaningful value?
+	•	Does it avoid depending on print formatting?
+	•	If randomness exists, did you force determinism (e.g., sample_k >= total)?
 
 5. **Prefer minimal diffs.**
    - No drive-by refactors unless explicitly requested.
@@ -53,8 +58,9 @@ Your job as an agent: make small, correct, test-backed changes quickly, without 
 ## How to run things (try these in order)
 
 ### Run unit tests (preferred)
-- `uv run python -m unittest`  
-- If `uv` is unavailable: `python -m unittest`
+- `uv run make test`  
+- If `uv` is unavailable: `make test`
+- for verbose replace `make test` with make `verbose-test`
 
 ### Run a specific test module
 - `uv run python -m unittest tests.test_split_along_axis`
@@ -165,4 +171,6 @@ The goal is not bureaucracy; it’s to make review faster later.
 - Prefer explicit axis/shape handling over cleverness.
 - When emitting tables, keep column names stable unless a user asks otherwise.
 - When catching exceptions for “continue but record error,” include useful context in the recorded error string.
+- For test assertions, prefer asserting on the actual written artifacts (data/*.csv, tables/*.csv, logs/warnings.csv) over matching printed output. Matching stdout is allowed only for exit-code / crash-path tests.
 - Avoid float nondeterminism in tests: compare exact integers or small arrays, or use tolerances intentionally.
+- When testing weight stats, set sample_per_matrix >= rows*cols so percentiles are computed on the full matrix and are deterministic.
