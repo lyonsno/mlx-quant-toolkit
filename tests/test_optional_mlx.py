@@ -131,10 +131,109 @@ class OptionalMlxPipelineTests(unittest.TestCase):
             header = quant_path.read_text().splitlines()[0]
             self.assertIn("scheme", header)
 
-    def test_build_tables_after_collect_data_without_mlx(self):
+    def test_build_tables_computes_quant_deltas_from_manual_inputs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            run_dir, env, _ = self._setup_and_collect(Path(tmp_dir))
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
 
+            cfg = {
+                "output": {"format": "csv", "compression": None},
+                "delta_pairs": [{"name": "delta_ab", "a": "scheme_a", "b": "scheme_b"}],
+            }
+            (run_dir / "analysis_config.json").write_text(json.dumps(cfg, indent=2))
+
+            stat_cols = [
+                "layer",
+                "proj",
+                "mean",
+                "std",
+                "mean_abs",
+                "rms",
+                "max_abs",
+                "p50_abs",
+                "p99_abs",
+                "p999_abs",
+                "outlier_max_over_mean",
+                "outlier_p99_over_median",
+                "outlier_p999_over_median",
+            ]
+            matrix_rows = [
+                {
+                    "layer": 0,
+                    "proj": "down_proj",
+                    "mean": 1.0,
+                    "std": 0.1,
+                    "mean_abs": 1.0,
+                    "rms": 1.0,
+                    "max_abs": 1.5,
+                    "p50_abs": 1.0,
+                    "p99_abs": 1.4,
+                    "p999_abs": 1.5,
+                    "outlier_max_over_mean": 1.5,
+                    "outlier_p99_over_median": 1.4,
+                    "outlier_p999_over_median": 1.5,
+                }
+            ]
+            with (data_dir / "matrix_stats.csv").open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=stat_cols)
+                writer.writeheader()
+                writer.writerows(matrix_rows)
+
+            quant_cols = [
+                "derived_tensor",
+                "layer",
+                "proj",
+                "expert_id",
+                "rows",
+                "cols",
+                "scheme",
+                "w_rel_fro",
+                "w_rel_max",
+                "scale_mean",
+                "scale_max",
+                "bias_mean",
+                "bias_max",
+            ]
+            quant_rows = [
+                {
+                    "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                    "layer": 0,
+                    "proj": "down_proj",
+                    "expert_id": 0,
+                    "rows": 2,
+                    "cols": 2,
+                    "scheme": "scheme_a",
+                    "w_rel_fro": 0.15,
+                    "w_rel_max": 0.2,
+                    "scale_mean": 0.0,
+                    "scale_max": 0.0,
+                    "bias_mean": 0.0,
+                    "bias_max": 0.0,
+                },
+                {
+                    "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                    "layer": 0,
+                    "proj": "down_proj",
+                    "expert_id": 0,
+                    "rows": 2,
+                    "cols": 2,
+                    "scheme": "scheme_b",
+                    "w_rel_fro": 0.09,
+                    "w_rel_max": 0.12,
+                    "scale_mean": 0.0,
+                    "scale_max": 0.0,
+                    "bias_mean": 0.0,
+                    "bias_max": 0.0,
+                },
+            ]
+            with (data_dir / "quant_sim.csv").open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=quant_cols)
+                writer.writeheader()
+                writer.writerows(quant_rows)
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
             self._run([
                 sys.executable,
                 str(self.repo_root / "scripts" / "build_tables.py"),
@@ -142,9 +241,23 @@ class OptionalMlxPipelineTests(unittest.TestCase):
                 str(run_dir),
             ], env=env)
 
-            self.assertTrue((run_dir / "tables" / "A_weight_global_summary.csv").exists())
-            self.assertTrue((run_dir / "tables" / "B_quant_global_summary.csv").exists())
-            self.assertTrue((run_dir / "tables" / "B_quant_deltas.csv").exists())
+            deltas_path = run_dir / "tables" / "B_quant_deltas.csv"
+            with deltas_path.open(newline="") as handle:
+                delta_rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(delta_rows), 1)
+            delta_row = delta_rows[0]
+            self.assertEqual(delta_row["delta_name"], "delta_ab")
+            self.assertAlmostEqual(float(delta_row["delta_w_rel_fro"]), 0.06)
+            self.assertAlmostEqual(float(delta_row["delta_w_rel_max"]), 0.08)
+
+            global_path = run_dir / "tables" / "B_quant_global_summary.csv"
+            with global_path.open(newline="") as handle:
+                global_rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(global_rows), 2)
+            scheme_a = next(row for row in global_rows if row["scheme"] == "scheme_a")
+            self.assertAlmostEqual(float(scheme_a["w_rel_fro__median"]), 0.15)
 
     def test_collect_data_with_mlx_quantize_failure_emits_error_message(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
