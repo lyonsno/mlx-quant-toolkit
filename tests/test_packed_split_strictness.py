@@ -1,3 +1,4 @@
+import csv
 import io
 import json
 import os
@@ -93,10 +94,16 @@ class PackedSplitStrictnessTests(unittest.TestCase):
         }
         (run_dir / "analysis_config.json").write_text(json.dumps(cfg, indent=2))
 
-    def _setup_run(self, tmp_path: Path, strict_packed_split: bool) -> tuple[Path, dict]:
+    def _setup_run(
+        self,
+        tmp_path: Path,
+        strict_packed_split: bool,
+        arr: np.ndarray = None,
+    ) -> tuple[Path, dict]:
         model_dir = tmp_path / "model"
         model_dir.mkdir(parents=True, exist_ok=True)
-        arr = np.arange(32, dtype=np.float32).reshape(2, 4, 4)
+        if arr is None:
+            arr = np.arange(32, dtype=np.float32).reshape(2, 4, 4)
         self._write_npz_with_key(
             model_dir / "weights.npz",
             "layers.0.experts.0.gate_proj.weight",
@@ -135,6 +142,33 @@ class PackedSplitStrictnessTests(unittest.TestCase):
             matrix_path = run_dir / "data" / "matrix_stats.csv"
             self.assertTrue(matrix_path.exists())
             self.assertIn("matrix_stats rows", output)
+
+    def test_packed_split_success_produces_expected_projs(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            arr = np.arange(2 * 6 * 4, dtype=np.float32).reshape(2, 6, 4)
+            run_dir, env = self._setup_run(Path(tmp_dir), strict_packed_split=True, arr=arr)
+            self._run_collect(run_dir, env, check=True)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+
+            with matrix_path.open(newline="") as handle:
+                reader = csv.DictReader(handle)
+                rows = list(reader)
+
+            projs = {"gate_proj", "down_proj"}
+            proj_rows = [row for row in rows if row.get("proj") in projs]
+
+            self.assertTrue(proj_rows)
+            self.assertEqual({row["proj"] for row in proj_rows}, projs)
+            for row in proj_rows:
+                self.assertEqual(int(row["rows"]), 3)
+                self.assertEqual(int(row["cols"]), 4)
+
+            warnings_path = run_dir / "logs" / "warnings.csv"
+            if warnings_path.exists():
+                warnings_text = warnings_path.read_text()
+                self.assertNotIn("packed_split failed", warnings_text)
 
 
 if __name__ == "__main__":
