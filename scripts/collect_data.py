@@ -609,24 +609,25 @@ def _mlx_quant_sim(
                     "error": None
                 })
 
-        except Exception as e:
-            warns.append(f"[quant_sim] scheme={name} failed: {e}")
+        except Exception as err:
+            warns.append(f"[quant_sim] scheme={name} failed: {err}")
             # still emit rows with error so you can see coverage
             E = bank.shape[0]
-            for e in range(E):
+            err_msg = f"{type(err).__name__}: {err}"
+            for e_in_bank in range(E):
                 rows.append({
                     "scheme": name,
                     "mode": mode,
                     "bits": bits,
                     "group_size": group_size,
-                    "expert_id_in_bank": e,
+                    "expert_id_in_bank": e_in_bank,
                     "w_rel_fro": None,
                     "w_rel_max": None,
                     "scale_mean": None,
                     "scale_max": None,
                     "bias_mean": None,
                     "bias_max": None,
-                    "error": str(e),
+                    "error": err_msg,
                 })
 
     return pd.DataFrame(rows), warns
