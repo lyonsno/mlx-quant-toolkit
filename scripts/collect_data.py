@@ -96,6 +96,10 @@ def _load_config(run_dir: Path) -> Dict[str, Any]:
 
 
 def _iter_weight_files(model_path: Path, exts: List[str]) -> Iterable[Path]:
+    if model_path.is_file():
+        if model_path.suffix in exts:
+            yield model_path
+        return
     for root, _, files in os.walk(model_path):
         for fn in files:
             p = Path(root) / fn
@@ -181,8 +185,14 @@ def _infer_proj(name: str, alias_map: Dict[str, List[str]]) -> Optional[str]:
     n = name.lower()
     for canonical, aliases in alias_map.items():
         for a in aliases:
-            if a.lower() in n:
-                return canonical
+            alias = a.lower()
+            if alias.startswith(".") and alias.endswith("."):
+                if alias in n:
+                    return canonical
+            else:
+                pattern = r"(?<![A-Za-z0-9_])" + re.escape(alias) + r"(?![A-Za-z0-9_])"
+                if re.search(pattern, n):
+                    return canonical
     return None
 
 
@@ -272,6 +282,7 @@ def _apply_rules(
     expert_re: re.Pattern,
     alias_map: Dict[str, List[str]],
     shared_keywords: List[str],
+    proj_group_strict: bool,
 ) -> Optional[List[ExtractedBank]]:
     for r in rules:
         if not r.enabled:
@@ -296,7 +307,11 @@ def _apply_rules(
         if r.packed_split is None:
             if r.proj_group is not None:
                 raw = m.group(r.proj_group)
-                proj = _infer_proj(raw, {k: [k] for k in alias_map.keys()}) or raw
+                proj = _infer_proj(raw, alias_map)
+                if proj is None:
+                    if proj_group_strict:
+                        return None
+                    proj = raw
             else:
                 proj = _infer_proj(name, alias_map)
             if proj is None:
@@ -664,6 +679,7 @@ def main():
     alias_map = parsing["proj_aliases"]
     shared_keywords = parsing.get("shared_expert_keywords", ["shared", "expert"])
     strict_packed_split = bool(parsing.get("strict_packed_split", True))
+    proj_group_strict = bool(parsing.get("proj_group_strict", False))
 
     rules = _compile_rules(cfg)
 
@@ -745,6 +761,7 @@ def main():
                     expert_re,
                     alias_map,
                     shared_keywords,
+                    proj_group_strict,
                 )
             except PackedSplitError as e:
                 if strict_packed_split:

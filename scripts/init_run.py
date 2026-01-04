@@ -33,7 +33,8 @@ DEFAULT_CONFIG = {
     },
 
     "shared_expert_keywords": ["shared", "expert"],
-    "strict_packed_split": True
+    "strict_packed_split": True,
+    "proj_group_strict": False
   },
 
   "extract_rules": [
