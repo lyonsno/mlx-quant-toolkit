@@ -60,13 +60,23 @@ class OptionalMlxPipelineTests(unittest.TestCase):
             text=True,
         )
 
-    def _setup_and_collect(self, tmp_path: Path, stub_factory=None, cfg_overrides=None):
+    def _setup_and_collect(
+        self,
+        tmp_path: Path,
+        stub_factory=None,
+        cfg_overrides=None,
+        tensor_key: str | None = None,
+        arr: np.ndarray | None = None,
+    ):
         model_dir = tmp_path / "model"
         model_dir.mkdir(parents=True, exist_ok=True)
-        arr = np.arange(32, dtype=np.float32).reshape(2, 4, 4)
+        if arr is None:
+            arr = np.arange(32, dtype=np.float32).reshape(2, 4, 4)
+        if tensor_key is None:
+            tensor_key = "layers.0.experts.0.down_proj.weight"
         self._write_npz_with_key(
             model_dir / "weights.npz",
-            "layers.0.experts.0.down_proj.weight",
+            tensor_key,
             arr,
         )
 
@@ -97,7 +107,10 @@ class OptionalMlxPipelineTests(unittest.TestCase):
         ]
         if cfg_overrides:
             for key, value in cfg_overrides.items():
-                cfg[key] = value
+                if isinstance(value, dict) and isinstance(cfg.get(key), dict):
+                    cfg[key].update(value)
+                else:
+                    cfg[key] = value
         cfg_path.write_text(json.dumps(cfg, indent=2))
 
         if stub_factory is None:
@@ -130,6 +143,36 @@ class OptionalMlxPipelineTests(unittest.TestCase):
 
             header = quant_path.read_text().splitlines()[0]
             self.assertIn("scheme", header)
+
+    def test_collect_data_emits_unmatched_tensors_when_no_proj_match(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tensor_name = "layers.0.experts.0.weird_proj.weight"
+            run_dir, _, _ = self._setup_and_collect(
+                Path(tmp_dir),
+                tensor_key=tensor_name,
+                cfg_overrides={
+                    "scan": {"experts_only": True},
+                    "debug": {"dump_unmatched_tensors": True},
+                },
+            )
+
+            unmatched_path = run_dir / "data" / "unmatched_tensors.csv"
+            self.assertTrue(unmatched_path.exists())
+
+            with unmatched_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            match = next((row for row in rows if row["tensor_name"] == tensor_name), None)
+            self.assertIsNotNone(match)
+            self.assertEqual(match["reason"], "no_rule_match_or_proj_infer")
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+
+            with matrix_path.open(newline="") as handle:
+                matrix_rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(matrix_rows), 0)
 
     def test_build_tables_computes_quant_deltas_from_manual_inputs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
