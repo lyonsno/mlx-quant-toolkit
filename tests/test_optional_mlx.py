@@ -304,6 +304,7 @@ class OptionalMlxPipelineTests(unittest.TestCase):
 
     def test_collect_data_with_mlx_quantize_failure_emits_error_message(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
+            arr = np.arange(32, dtype=np.float32).reshape(2, 4, 4)
             run_dir, _, _ = self._setup_and_collect(
                 Path(tmp_dir),
                 stub_factory=self._create_stub_mlx_quantize_fail,
@@ -319,6 +320,7 @@ class OptionalMlxPipelineTests(unittest.TestCase):
                         }
                     ],
                 },
+                arr=arr,
             )
 
             quant_path = run_dir / "data" / "quant_sim.csv"
@@ -328,7 +330,11 @@ class OptionalMlxPipelineTests(unittest.TestCase):
                 reader = csv.DictReader(handle)
                 rows = list(reader)
 
-            self.assertGreaterEqual(len(rows), 2)
+            self.assertEqual(len(rows), arr.shape[0])
+
+            expert_ids = [int(row["expert_id"]) for row in rows]
+            self.assertEqual(sorted(expert_ids), list(range(arr.shape[0])))
+
             for row in rows:
                 self.assertIn("stub quantize fail", row.get("error", ""))
 
