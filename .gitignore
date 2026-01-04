@@ -43,3 +43,6 @@ runs/
 .env
 .env.*
 .envrc
+
+# Agent progress reports
+/agents/*
