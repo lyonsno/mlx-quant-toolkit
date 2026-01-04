@@ -142,6 +142,13 @@ class PackedSplitStrictnessTests(unittest.TestCase):
             matrix_path = run_dir / "data" / "matrix_stats.csv"
             self.assertTrue(matrix_path.exists())
             self.assertIn("matrix_stats rows", output)
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row.get("proj") == "gate_proj" for row in rows))
+            for row in rows:
+                self.assertEqual(int(row["rows"]), 4)
+                self.assertEqual(int(row["cols"]), 4)
 
     def test_packed_split_success_produces_expected_projs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
