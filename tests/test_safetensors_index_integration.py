@@ -92,12 +92,11 @@ class SafetensorsIndexIntegrationTests(unittest.TestCase):
 
             t1 = "layers.0.experts.0.down_proj.weight"
             t2 = "layers.0.experts.1.down_proj.weight"
-            t3 = "layers.0.experts.2.down_proj.weight"
             arr = np.arange(4, dtype=np.float32).reshape(2, 2)
 
             self._write_safetensors(model_dir / "shard1.safetensors", {t1: arr})
             self._write_safetensors(model_dir / "shard2.safetensors", {t2: arr + 1})
-            self._write_safetensors(model_dir / "extra.safetensors", {t3: arr + 2})
+            (model_dir / "extra.safetensors").write_bytes(b"not a safetensors file")
 
             index_path = model_dir / "model.safetensors.index.json"
             self._write_index(
@@ -134,10 +133,69 @@ class SafetensorsIndexIntegrationTests(unittest.TestCase):
             report_path = run_dir / "logs" / "index_report.json"
             self.assertTrue(report_path.exists())
             report = json.loads(report_path.read_text())
+            expected_shards = {"shard1.safetensors", "shard2.safetensors"}
             self.assertEqual(report.get("missing_tensors"), [])
             self.assertEqual(report.get("extra_tensors"), [])
             self.assertEqual(report.get("missing_shards"), [])
-            self.assertEqual(report.get("extra_shards"), [])
+            self.assertEqual(set(report.get("expected_shards", [])), expected_shards)
+            self.assertEqual(set(report.get("scanned_shards", [])), expected_shards)
+            self.assertEqual(set(report.get("extra_scanned_shards", [])), set())
+            self.assertNotIn("extra.safetensors", report.get("scanned_shards", []))
+            self.assertEqual(
+                set(report.get("extra_safetensors_files_on_disk", [])),
+                {"extra.safetensors"},
+            )
+
+    def test_collect_data_reports_extra_tensor_in_indexed_shard(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            t1 = "layers.0.experts.0.down_proj.weight"
+            t2 = "layers.0.experts.1.down_proj.weight"
+            t_extra = "layers.0.experts.2.down_proj.weight"
+            arr = np.arange(4, dtype=np.float32).reshape(2, 2)
+
+            self._write_safetensors(model_dir / "shard1.safetensors", {t1: arr, t_extra: arr + 2})
+            self._write_safetensors(model_dir / "shard2.safetensors", {t2: arr + 1})
+
+            index_path = model_dir / "model.safetensors.index.json"
+            self._write_index(
+                index_path,
+                {t1: "shard1.safetensors", t2: "shard2.safetensors"},
+            )
+
+            run_dir = tmp_path / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, model_dir, use_index=True, strict_index=False)
+
+            self._run_collect(run_dir, self._env(), check=True)
+
+            inv_path = run_dir / "data" / "tensor_inventory.csv"
+            with inv_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(rows), 3)
+            by_name = {row["tensor_name"]: row for row in rows}
+            self.assertEqual(by_name[t1]["in_index"], "True")
+            self.assertEqual(by_name[t1]["index_shard"], "shard1.safetensors")
+            self.assertEqual(by_name[t2]["in_index"], "True")
+            self.assertEqual(by_name[t2]["index_shard"], "shard2.safetensors")
+            self.assertEqual(by_name[t_extra]["in_index"], "False")
+            self.assertEqual(by_name[t_extra]["index_shard"], "")
+
+            report_path = run_dir / "logs" / "index_report.json"
+            self.assertTrue(report_path.exists())
+            report = json.loads(report_path.read_text())
+            expected_shards = {"shard1.safetensors", "shard2.safetensors"}
+            self.assertEqual(report.get("missing_tensors"), [])
+            self.assertEqual(set(report.get("extra_tensors", [])), {t_extra})
+            self.assertEqual(report.get("missing_shards"), [])
+            self.assertEqual(set(report.get("expected_shards", [])), expected_shards)
+            self.assertEqual(set(report.get("scanned_shards", [])), expected_shards)
+            self.assertEqual(set(report.get("extra_scanned_shards", [])), set())
+            self.assertEqual(set(report.get("extra_safetensors_files_on_disk", [])), set())
 
     def test_collect_data_missing_shard_warns_and_reports_when_non_strict(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -172,8 +230,13 @@ class SafetensorsIndexIntegrationTests(unittest.TestCase):
             report_path = run_dir / "logs" / "index_report.json"
             self.assertTrue(report_path.exists())
             report = json.loads(report_path.read_text())
+            expected_shards = {"shard1.safetensors", "shard2.safetensors"}
             self.assertIn("shard2.safetensors", report.get("missing_shards", []))
             self.assertIn(t2, report.get("missing_tensors", []))
+            self.assertEqual(set(report.get("expected_shards", [])), expected_shards)
+            self.assertEqual(set(report.get("scanned_shards", [])), {"shard1.safetensors"})
+            self.assertEqual(set(report.get("extra_scanned_shards", [])), set())
+            self.assertEqual(set(report.get("extra_safetensors_files_on_disk", [])), set())
 
             inv_path = run_dir / "data" / "tensor_inventory.csv"
             with inv_path.open(newline="") as handle:
