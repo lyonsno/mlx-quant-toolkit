@@ -130,7 +130,10 @@ class CollectDataMetadataTests(unittest.TestCase):
             budget_path = run_dir / "logs" / "model_shape_budget.json"
             self.assertTrue(budget_path.exists())
             budget = json.loads(budget_path.read_text())
-            self.assertEqual(budget["config_path"], str(model_dir / "config.json"))
+            self.assertEqual(
+                Path(budget["config_path"]).resolve(),
+                (model_dir / "config.json").resolve(),
+            )
             self.assertEqual(budget["shape_budget"]["hidden_size"], 16)
             self.assertEqual(budget["shape_budget"]["num_hidden_layers"], 2)
             self.assertEqual(budget["shape_budget"]["num_experts"], 4)
