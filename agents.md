@@ -46,10 +46,15 @@ Your job as an agent: make small, correct, test-backed changes quickly, without 
    - Prefer asserting concrete invariants: shapes, columns, row counts, warnings/errors emitted, numeric identities on tiny examples.
    - Use this checklist whenever applicable.
    	•	Does this test assert row counts (not just file existence)?
-	•	Does it assert key columns and at least one meaningful value?
-	•	Does it avoid depending on print formatting?
-	•	If randomness exists, did you force determinism (e.g., sample_k >= total)?
-
+	  •	Does it assert key columns and at least one meaningful value?
+  	•	Does it avoid depending on print formatting?
+	  •	If randomness exists, did you force determinism (e.g., sample_k >= total)?
+  	•	Every ticket that changes scanning/selection/filtering must include at least one “poison pill” test or “fail-if-touched” fixture.
+    	-	Example: add an extra file that is invalid/unreadable so the run only succeeds if the scanner truly ignores it.
+	  •	Every ticket that introduces a report (index_report, warnings, etc.) must include at least one test where each category is non-empty (when feasible).
+	    -	Example: don’t only assert extra_tensors == []; force a scenario where it’s ["…"].
+	  •	For any new config key: add a test for “key absent behaves sensibly” (backward compatibility with older configs).
+  
 5. **Prefer minimal diffs.**
    - No drive-by refactors unless explicitly requested.
 
@@ -61,6 +66,7 @@ Your job as an agent: make small, correct, test-backed changes quickly, without 
 - `uv run make test`  
 - If `uv` is unavailable: `make test`
 - for verbose replace `make test` with make `verbose-test`
+- if one time network permissions are needed to enable running tests in your environment, you should request it.
 
 ### Run a specific test module
 - `uv run python -m unittest tests.test_split_along_axis`
@@ -128,12 +134,15 @@ If you touch this behavior, you must update/extend tests.
 When a user request includes **tests + fix**, default to a two-phase approach:
 
 ### Phase 1 — Tests only (default safe posture)
+- update your progress file continually as you work, not just at the beginning and the end. 
 - Write the unit test(s) and/or acceptance test(s).
 - Ensure the tests would meaningfully fail on the pre-fix behavior.
 - Stop and report:
   - what tests you added,
-  - what failure you expect (and why),
-  - what command(s) to run.
+	-	the exact exception / failure message you expect on pre-fix (or the missing symbol / wrong output shape),
+	-	and one sentence on why this failure demonstrates the test is non-vacuous.
+	-	If you can run tests, run them and paste a short excerpt of the failing output (no walls of text, just the key line).
+	-	If you cannot run tests, say what prevented it (missing dependency, time, environment), not just “not run.”
 
 ### Phase 2 — Implementation
 - Implement the smallest fix that makes the tests pass.
@@ -149,7 +158,7 @@ If the user explicitly says “do it end-to-end in one go,” you can do both ph
 
 ## Progress notes (lightweight but persistent)
 
-For each ticket/issue, create or update:
+For each ticket/issue, create (if necessary), and then update *as you work*:
 - `agents/<ticket_slug>_progress.md`
 - continually update the file as you work, not only at the end.
 Keep it short but concrete:
@@ -158,6 +167,8 @@ Keep it short but concrete:
 - Changes made (files + high-level)
 - Decisions / tradeoffs
 - Any assumptions you made
+- Include “known open questions / ambiguities” When any are encountered (even if you resolved them).
+-	Include “risk of test loophole” if you notice any (like “could be passed by filtering outputs”).
 - Commands run + result (or why you couldn’t run them)
 - Do not modify existing file contents, only append to it or annotate it.
 - Do not delete the file.
@@ -171,6 +182,9 @@ The goal is not bureaucracy; it’s to make review faster later.
 - Prefer explicit axis/shape handling over cleverness.
 - When emitting tables, keep column names stable unless a user asks otherwise.
 - When catching exceptions for “continue but record error,” include useful context in the recorded error string.
-- For test assertions, prefer asserting on the actual written artifacts (data/*.csv, tables/*.csv, logs/warnings.csv) over matching printed output. Matching stdout is allowed only for exit-code / crash-path tests.
+- For test assertions, prefer asserting on the actual written artifacts (data/*.csv, tables/*.csv, logs/warnings.csv) over matching printed output. Matching stdout is allowed only for:
+	•	crash-path / exit-code tests where stderr content is the contract (e.g., strict mode errors),
+	•	or when stdout is explicitly part of a stable CLI contract (rare here).
+	•	If you need to prove something happened, prefer checking logs/*.json, warnings.csv, or a report artifact.
 - Avoid float nondeterminism in tests: compare exact integers or small arrays, or use tolerances intentionally.
 - When testing weight stats, set sample_per_matrix >= rows*cols so percentiles are computed on the full matrix and are deterministic.
