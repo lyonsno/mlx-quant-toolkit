@@ -37,6 +37,12 @@ DEFAULT_CONFIG = {
     "proj_group_strict": False
   },
 
+  "metadata": {
+    "enabled": True,
+    "mode": "validate",
+    "config_path": None
+  },
+
   "extract_rules": [
     {
       "name": "generic_3d_expert_bank_separate",
