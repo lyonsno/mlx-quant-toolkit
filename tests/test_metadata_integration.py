@@ -38,6 +38,17 @@ class MetadataInitRunTests(unittest.TestCase):
             self.assertEqual(cfg["metadata"].get("mode"), "validate")
             self.assertIsNone(cfg["metadata"].get("config_path"))
 
+    def test_init_run_writes_scan_index_defaults(self):
+        init_run = _load_init_run(self.repo_root)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            run_dir = init_run.init_run(tmp_path, "model", "run", None)
+            cfg = json.loads((run_dir / "analysis_config.json").read_text())
+
+            scan_cfg = cfg.get("scan", {})
+            self.assertEqual(scan_cfg.get("use_safetensors_index_json"), True)
+            self.assertEqual(scan_cfg.get("strict_index"), False)
+
 
 class CollectDataMetadataTests(unittest.TestCase):
     def setUp(self):

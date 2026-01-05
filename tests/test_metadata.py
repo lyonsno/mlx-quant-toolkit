@@ -137,3 +137,70 @@ class MetadataModuleTests(unittest.TestCase):
             p.write_text(json.dumps([1, 2, 3]))
             parsed = self.metadata.parse_config_json(p)
             self.assertEqual(parsed, {})
+
+    def test_find_safetensors_index_json_prefers_root(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            root_index = model_dir / "model.safetensors.index.json"
+            root_index.write_text(json.dumps({"weight_map": {}}))
+
+            fallback = model_dir / "weights.safetensors.index.json"
+            fallback.write_text(json.dumps({"weight_map": {}}))
+
+            found = self.metadata.find_safetensors_index_json(model_dir)
+            self.assertEqual(found, root_index)
+
+            weight_file = model_dir / "weights.safetensors"
+            weight_file.write_text("stub")
+            found_from_file = self.metadata.find_safetensors_index_json(weight_file)
+            self.assertEqual(found_from_file, root_index)
+
+    def test_find_safetensors_index_json_falls_back_without_deep_recursion(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            fallback = model_dir / "weights.safetensors.index.json"
+            fallback.write_text(json.dumps({"weight_map": {}}))
+
+            nested_dir = model_dir / "nested"
+            nested_dir.mkdir(parents=True, exist_ok=True)
+            nested = nested_dir / "nested.safetensors.index.json"
+            nested.write_text(json.dumps({"weight_map": {}}))
+
+            found = self.metadata.find_safetensors_index_json(model_dir)
+            self.assertEqual(found, fallback)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            nested_dir = model_dir / "nested"
+            nested_dir.mkdir(parents=True, exist_ok=True)
+            nested = nested_dir / "nested.safetensors.index.json"
+            nested.write_text(json.dumps({"weight_map": {}}))
+
+            found = self.metadata.find_safetensors_index_json(model_dir)
+            self.assertIsNone(found)
+
+    def test_parse_safetensors_index_returns_weight_map_and_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            index_path = tmp_path / "model.safetensors.index.json"
+            payload = {
+                "metadata": {"format": "pt", "total_size": 123},
+                "weight_map": {
+                    "layers.0.experts.0.down_proj.weight": "shard1.safetensors",
+                    "layers.0.experts.1.down_proj.weight": "shard2.safetensors",
+                },
+            }
+            index_path.write_text(json.dumps(payload, indent=2))
+
+            weight_map, metadata = self.metadata.parse_safetensors_index(index_path)
+            self.assertEqual(weight_map, payload["weight_map"])
+            self.assertEqual(metadata, payload["metadata"])
