@@ -39,3 +39,9 @@
 ## Commands run (post-fix)
 - `./.venv/bin/python -m unittest tests.test_iter_tensors_from_file_npz_close` (PASS)
 - `./.venv/bin/python -m unittest tests.test_optional_mlx` (PASS)
+
+## Commits
+[main 177569e] add file handler for opening npz tensors and associated tests
+ 3 files changed, 165 insertions(+), 3 deletions(-)
+ create mode 100644 docs/agent_progress_reports/context_manage_np_dot_load_progress.md
+ create mode 100644 tests/test_iter_tensors_from_file_npz_close.py
