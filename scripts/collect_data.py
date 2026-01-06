@@ -114,17 +114,61 @@ def _write_json(obj: Any, path: Path) -> None:
     path.write_text(json.dumps(obj, indent=2, sort_keys=True))
 
 
-def _write_df(df: pd.DataFrame, path: Path, fmt: str, compression: str | None):
+def _write_df(df: pd.DataFrame, path: Path, fmt: str, compression: str | None) -> Dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     if fmt == "parquet":
         try:
             df.to_parquet(path, index=False, compression=compression)
-            return
+            return {
+                "path": path,
+                "format": "parquet",
+                "fallback": False,
+                "error": "",
+            }
         except Exception as e:
             print(f"[warn] parquet write failed ({e}); falling back to CSV for {path}")
-            df.to_csv(path.with_suffix(".csv"), index=False)
-            return
-    df.to_csv(path.with_suffix(".csv"), index=False)
+            csv_path = path.with_suffix(".csv")
+            df.to_csv(csv_path, index=False)
+            return {
+                "path": csv_path,
+                "format": "csv",
+                "fallback": True,
+                "error": f"{type(e).__name__}: {e}",
+            }
+    csv_path = path.with_suffix(".csv")
+    df.to_csv(csv_path, index=False)
+    return {
+        "path": csv_path,
+        "format": "csv",
+        "fallback": False,
+        "error": "",
+    }
+
+
+def _path_for_manifest(path: Path, run_dir: Path) -> str:
+    # Prefer run_dir-relative paths for portability, fall back to absolute.
+    try:
+        return str(path.relative_to(run_dir))
+    except Exception:
+        return str(path)
+
+
+def _path_for_scan_plan(path: Path, model_path: Path) -> str:
+    # Prefer model_path-relative paths so scan plans remain portable.
+    base = model_path.parent if model_path.is_file() else model_path
+    return os.path.relpath(str(path), start=str(base))
+
+
+def _artifact_entry(meta: Dict[str, Any], run_dir: Path, rows: int) -> Dict[str, Any]:
+    # Normalize the write metadata into a JSON-friendly manifest entry.
+    entry = dict(meta)
+    entry["rows"] = int(rows)
+    raw_path = entry.get("path")
+    if isinstance(raw_path, Path):
+        entry["path"] = _path_for_manifest(raw_path, run_dir)
+    elif isinstance(raw_path, str):
+        entry["path"] = _path_for_manifest(Path(raw_path), run_dir)
+    return entry
 
 
 def _load_config(run_dir: Path) -> Dict[str, Any]:
@@ -730,8 +774,14 @@ def main():
     cfg = _load_config(run_dir)
     manifest = _safe_read_json_dict(run_dir / "manifest.json")
 
+    # Preserve the config-provided model_path so run_context can show overrides.
+    configured_model_path = cfg.get("model_path")
+    cli_overrides: Dict[str, Any] = {}
+
     if args.model_path is not None:
-        cfg["model_path"] = str(Path(args.model_path).expanduser().resolve())
+        override_path = Path(args.model_path).expanduser().resolve()
+        cfg["model_path"] = str(override_path)
+        cli_overrides["model_path"] = str(override_path)
 
     model_path = Path(cfg["model_path"]).expanduser().resolve()
     if not model_path.exists():
@@ -863,25 +913,38 @@ def main():
                         warn_log.append(f"[meta] no recognized fields in {cfg_path}")
 
     index_path = None
+    index_path_found = None
     weight_map = None
     index_metadata = {}
     expected_shards: set[str] = set()
     expected_shard_paths: Dict[str, Path] = {}
     extra_safetensors_files_on_disk: set[str] = set()
     index_active = False
+    index_searched = False
+    index_found = False
+    index_status = "disabled"
+    index_error = None
 
     if use_index:
+        index_searched = True
+        index_status = "not_found"
         index_mod = _get_metadata_module()
         if index_mod is None:
+            index_status = "unavailable"
+            index_error = "metadata module unavailable"
             warn_log.append("[index] metadata module unavailable; skipping index")
         else:
             find_fn = getattr(index_mod, "find_safetensors_index_json", None)
             parse_fn = getattr(index_mod, "parse_safetensors_index", None)
             if find_fn is None or parse_fn is None:
+                index_status = "unavailable"
+                index_error = "index helpers unavailable"
                 warn_log.append("[index] index helpers unavailable; skipping index")
             else:
-                index_path = find_fn(model_path)
+                index_path_found = find_fn(model_path)
+                index_path = index_path_found
                 if index_path is not None and index_path.exists():
+                    index_found = True
                     try:
                         weight_map, index_metadata = parse_fn(index_path)
                         weight_map = {k: _normalize_shard_id(v) for k, v in weight_map.items()}
@@ -889,8 +952,11 @@ def main():
                         warn_log.append(f"[index] failed to parse index {index_path}: {e}")
                         index_path = None
                         weight_map = None
+                        index_status = "error"
+                        index_error = f"{type(e).__name__}: {e}"
                     else:
                         index_active = True
+                        index_status = "active"
                         for shard in weight_map.values():
                             if Path(shard).suffix in exts:
                                 expected_shards.add(shard)
@@ -901,6 +967,7 @@ def main():
                             if p.is_file() and p.suffix == ".safetensors":
                                 extra_safetensors_files_on_disk.add(p.name)
                         extra_safetensors_files_on_disk -= expected_shards
+                # If find_fn returned a candidate path that does not exist, keep found False.
 
     index_ready = bool(index_active and weight_map is not None)
 
@@ -935,6 +1002,20 @@ def main():
         files.sort()
     if max_files is not None:
         files = files[: int(max_files)]
+
+    # Capture the final scan plan after index decisions + max_files are applied.
+    scan_plan = {
+        "use_safetensors_index_json": use_index,
+        "strict_index": strict_index,
+        "extensions": exts,
+        "max_files": int(max_files) if max_files is not None else None,
+        "experts_only": experts_only,
+        "include_shared_expert": include_shared,
+        "inventory_all_tensors": inventory_all,
+        "scan_mode": "index" if index_ready else "walk",
+        "scanned_files_count": int(len(files)),
+        "scanned_files_example": [_path_for_scan_plan(p, model_path) for p in files[:3]],
+    }
 
     t0 = time.time()
     print(f"[collect] scanning {len(files)} files under {model_path}")
@@ -1221,13 +1302,42 @@ def main():
     um_df = pd.DataFrame(unmatched_rows) if unmatched_rows else pd.DataFrame()
     wl_df = pd.DataFrame({"warning": warn_log}) if warn_log else pd.DataFrame()
 
-    _write_df(inv_df, run_dir / "data" / "tensor_inventory.parquet", fmt, compression)
-    _write_df(ms_df,  run_dir / "data" / "matrix_stats.parquet", fmt, compression)
-    _write_df(qs_df,  run_dir / "data" / "quant_sim.parquet", fmt, compression)
+    artifacts: Dict[str, Any] = {}
+    artifacts["tensor_inventory"] = _artifact_entry(
+        _write_df(inv_df, run_dir / "data" / "tensor_inventory.parquet", fmt, compression),
+        run_dir,
+        len(inv_df),
+    )
+    artifacts["matrix_stats"] = _artifact_entry(
+        _write_df(ms_df, run_dir / "data" / "matrix_stats.parquet", fmt, compression),
+        run_dir,
+        len(ms_df),
+    )
+    artifacts["quant_sim"] = _artifact_entry(
+        _write_df(qs_df, run_dir / "data" / "quant_sim.parquet", fmt, compression),
+        run_dir,
+        len(qs_df),
+    )
     if dump_unmatched:
-        _write_df(um_df, run_dir / "data" / "unmatched_tensors.parquet", fmt, compression)
+        artifacts["unmatched_tensors"] = _artifact_entry(
+            _write_df(um_df, run_dir / "data" / "unmatched_tensors.parquet", fmt, compression),
+            run_dir,
+            len(um_df),
+        )
     if not wl_df.empty:
-        _write_df(wl_df, run_dir / "logs" / "warnings.parquet", fmt, compression)
+        artifacts["warnings"] = _artifact_entry(
+            _write_df(wl_df, run_dir / "logs" / "warnings.parquet", fmt, compression),
+            run_dir,
+            len(wl_df),
+        )
+
+    write_manifest = {
+        "generated_at": _utc_now_iso(),
+        "requested_format": fmt,
+        "requested_compression": compression,
+        "artifacts": artifacts,
+    }
+    _write_json(write_manifest, run_dir / "logs" / "write_manifest.json")
 
     dt = time.time() - t0
 
@@ -1303,6 +1413,45 @@ def main():
         "index_summary": index_summary,
     }
     _write_json(run_health, run_dir / "logs" / "run_health.json")
+
+    # Persist a durable context snapshot so "haunted runs" can be reconstructed.
+    index_context_path = None
+    if index_path is not None and index_path.exists():
+        index_context_path = index_path
+    elif index_path_found is not None and index_path_found.exists():
+        index_context_path = index_path_found
+    index_info = {
+        "status": index_status,
+        "searched": bool(index_searched),
+        "found": bool(index_found),
+        "active": bool(index_ready),
+        "index_path": str(index_context_path) if index_context_path is not None else None,
+    }
+    if index_error:
+        index_info["error"] = index_error
+
+    configured_model_path_resolved = None
+    if configured_model_path:
+        configured_model_path_resolved = str(Path(configured_model_path).expanduser().resolve())
+
+    run_context = {
+        "generated_at": _utc_now_iso(),
+        "run": {
+            "run_dir": str(run_dir),
+            "model_id": manifest.get("model_id"),
+            "run_name": manifest.get("run_name"),
+            "created_at": manifest.get("created_at"),
+        },
+        "model_path": {
+            "configured": configured_model_path_resolved,
+            "resolved": str(model_path),
+            "source": "cli_override" if "model_path" in cli_overrides else "config",
+        },
+        "cli_overrides": cli_overrides,
+        "scan_plan": scan_plan,
+        "index": index_info,
+    }
+    _write_json(run_context, run_dir / "logs" / "run_context.json")
     print(f"[collect] done in {dt:.1f}s")
     print(f"[collect] tensor_inventory rows: {len(inv_df)}")
     print(f"[collect] matrix_stats rows:     {len(ms_df)}")
