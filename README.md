@@ -1,37 +1,32 @@
-Custom MLX Quant Tools
+# Custom MLX Quant Tools
 
-This repo is a small pipeline for analyzing Mixture-of-Experts (MoE) weight
-matrices and comparing MLX quantization schemes. It operates on a model
-checkpoint directory, extracts expert weight matrices based on configurable
-rules, computes summary statistics, optionally runs MLX quantization/dequant
-simulations, and then builds aggregated tables for review.
+Local-first Python pipeline for analyzing Mixture-of-Experts (MoE) expert weight matrices
+from `.safetensors` and `.npz`, computing per-expert stats, and optionally simulating
+MLX quantization/dequantization error. The outputs are designed to be inspectable and
+auditable: each run writes durable JSON “context” and “what was actually written” artifacts.
 
-What the scripts do
+## Quickstart
 
-- `scripts/init_run.py` creates a run directory under `runs/<model-id>/<run-name>`
-  with a template `analysis_config.json` and subfolders for data, tables, logs,
-  and plots. The config defines how weights are discovered and parsed.
-- `scripts/collect_data.py` scans the model files (safetensors or npz), matches
-  tensors to expert weight matrices using regex rules, canonicalizes layouts to
-  `(E,R,C)` or `(L,E,R,C)`, computes per-expert weight stats, and (if enabled)
-  runs MLX quantization simulations for each scheme. Results are written to
-  `runs/.../data/`.
-- `scripts/build_tables.py` loads the raw data and writes aggregated tables for
-  layer/block/global summaries, plus optional per-scheme deltas, into
-  `runs/.../tables/`.
-
-Typical usage
-
-1) Initialize a run directory and edit the config:
+1) Initialize a run directory and edit the config template:
 
 ```bash
-python scripts/init_run.py --root ./runs --model-id <model> --run-name <run> --model-path /path/to/model
+python scripts/init_run.py \
+  --root ./runs \
+  --model-id <model> \
+  --run-name <run> \
+  --model-path /path/to/model
 ```
 
-2) Collect raw stats and quantization simulations:
+2) Collect raw stats (+ optional quant sim):
 
 ```bash
 python scripts/collect_data.py --run-dir ./runs/<model>/<run>
+```
+
+Optional: override the model path at invocation time (captured in `logs/run_context.json`):
+
+```bash
+python scripts/collect_data.py --run-dir ./runs/<model>/<run> --model-path /path/to/model
 ```
 
 3) Build summary tables:
@@ -40,13 +35,197 @@ python scripts/collect_data.py --run-dir ./runs/<model>/<run>
 python scripts/build_tables.py --run-dir ./runs/<model>/<run>
 ```
 
-Outputs
+## Installation / prerequisites
 
-- `runs/.../data/` includes `tensor_inventory`, `matrix_stats`, `quant_sim`,
-  and optional `unmatched_tensors` and `warnings`.
-- `runs/.../tables/` includes aggregated summaries for weight stats and quant
-  sims, plus optional delta tables between schemes.
+- Python `3.12.9` (see `.python-version`).
+- Dependencies are described in `pyproject.toml`.
+- MLX is primarily a macOS-focused stack; quant simulation requires a working `mlx` install.
 
-Config / Metadata Examples
+Common setups:
 
-- `example_safetensors_folder_metadata_convention_variance/.../` includes examples of configs (`config.json`, `model.safetensors.index.json`) for various architectures and checkpoints, organized in nested folders. They demonstrate what might be available and also indicate the range of potential variance. These can be used as test assets or for planning reference.
+- Using `uv` (recommended if you already use it): `uv sync`
+- Using `venv` + pip:
+  - `python -m venv .venv`
+  - `./.venv/bin/pip install -e .`
+
+Optional dependencies (runtime behavior):
+
+- `mlx` is only required for quantization simulation. If `mlx` is not importable,
+  `collect_data.py` will warn and still write `matrix_stats` and an empty `quant_sim`.
+- `pyarrow` is required for Parquet. If Parquet writing fails for any reason (missing
+  dependency, invalid compression, etc.), the pipeline falls back to CSV and records
+  that fallback in `logs/write_manifest.json`.
+
+## What the scripts do
+
+- `scripts/init_run.py`
+  - Creates `runs/<model-id>/<run-name>/` and a template `analysis_config.json`.
+- `scripts/collect_data.py`
+  - Scans the model files and inventories tensors (`data/tensor_inventory.*`).
+  - Extracts expert weight matrices by config-driven rules (with a heuristic fallback).
+  - Canonicalizes layouts to `(E,R,C)` or `(L,E,R,C)` and computes per-expert stats (`data/matrix_stats.*`).
+  - Optionally runs MLX quantize/dequant simulations (`data/quant_sim.*`).
+  - Writes auditability logs (`logs/run_health.json`, `logs/run_context.json`, `logs/write_manifest.json`, etc.).
+- `scripts/build_tables.py`
+  - Aggregates `matrix_stats` and `quant_sim` into layer/block/global summary tables under `tables/`.
+
+## Configuration (`analysis_config.json`)
+
+`analysis_config.json` is the main contract for how scanning/extraction/statistics behave.
+`init_run.py` writes a template with reasonable defaults.
+
+Key top-level sections:
+
+- `model_path`: path to model directory (or a single weight shard file).
+- `scan`: which files to scan and how.
+- `parsing`: how to interpret tensor names and how strict to be.
+- `extract_rules`: regex-driven extraction rules that map tensors into `(E,R,C)` banks.
+- `stats`: deterministic sampling and which metrics to compute.
+- `mlx` + `quant_schemes`: MLX quant simulation settings.
+- `delta_pairs`: optional scheme-vs-scheme deltas computed by `build_tables.py`.
+- `output`: preferred output format + compression.
+- `metadata`: optional model `config.json` parsing/logging.
+- `debug`: extra artifacts and progress printing.
+
+### Scan options
+
+Important keys under `scan`:
+
+- `extensions`: e.g. `[".safetensors", ".npz"]`
+- `max_files`: limit how many shards are scanned (useful for quick checks)
+- `experts_only`: if true, only analyze tensors that look like expert weights
+- `include_shared_expert`: include shared expert tensors when present
+- `inventory_all_tensors`: if true, inventory every tensor (even non-float weights)
+- `use_safetensors_index_json`: if true, prefer scanning only the shards referenced by an index file
+- `strict_index`: when index mode is active, fail if the index references missing shards
+
+### Extraction rules and canonical shapes
+
+Each extraction rule declares how to map a matched tensor into a canonical axis order:
+
+- `match`: regex applied to tensor name
+- `ndim`: expected input ndim
+- `layout`: `{layer_axis, expert_axis, rows_axis, cols_axis}` to transpose into `(L,E,R,C)` / `(E,R,C)` / `(R,C)`
+- Optional `proj_group` / `expert_group`: regex capture group indices used to extract proj/expert id
+- Optional `packed_split`: split a fused matrix along rows/cols into multiple projections
+
+If no rule matches, a heuristic fallback tries:
+
+- 3D tensors as `(E,R,C)`
+- 2D tensors as `(R,C)` with expert id parsed from the tensor name (if possible)
+
+Run-level counts for “rule vs fallback” are recorded in `logs/run_health.json`.
+
+### Output format and fallback
+
+The preferred format is controlled by `output.format`:
+
+- `parquet` (preferred) writes `*.parquet` when possible
+- `csv` writes `*.csv`
+
+When Parquet writing fails, the pipeline falls back to CSV for that artifact and records
+the error in `logs/write_manifest.json`.
+
+## Run outputs
+
+A run directory looks like:
+
+```text
+runs/<model-id>/<run-name>/
+  manifest.json
+  analysis_config.json
+  data/
+    tensor_inventory.{parquet|csv}
+    matrix_stats.{parquet|csv}
+    quant_sim.{parquet|csv}
+    unmatched_tensors.{parquet|csv}          (optional)
+  tables/
+    A_weight_layer_summary.{parquet|csv}
+    A_weight_block4_summary.{parquet|csv}
+    A_weight_global_summary.{parquet|csv}
+    B_quant_layer_summary.{parquet|csv}
+    B_quant_block4_summary.{parquet|csv}
+    B_quant_global_summary.{parquet|csv}
+    B_quant_deltas.{parquet|csv}             (optional; requires `delta_pairs`)
+  logs/
+    warnings.{parquet|csv}                   (only if warnings were emitted)
+    index_report.json                        (only if index mode is active)
+    model_config.raw.json                    (metadata enabled + config found)
+    model_shape_budget.json                  (metadata enabled + config found)
+    run_context.json                         (always)
+    run_health.json                          (always)
+    write_manifest.json                      (always)
+  cache/
+    sampled_indices/                         (deterministic sampling cache)
+```
+
+### Auditability artifacts (logs)
+
+- `logs/run_context.json` records:
+  - configured vs resolved `model_path`
+  - any CLI overrides (e.g. `--model-path`)
+  - the final scan plan (`scan_mode`, scanned files count/examples, etc.)
+  - index status (`disabled` / `not_found` / `active` / `unavailable` / `error`)
+- `logs/write_manifest.json` records:
+  - requested output settings (`format`, `compression`)
+  - the actual written artifact paths, formats, row counts, and Parquet→CSV fallbacks
+- `logs/run_health.json` records:
+  - scan summary (files scanned, tensors observed)
+  - extraction summary (rule vs fallback counts, unmatched counts)
+  - index summary counts when index mode is active
+
+### Data artifacts (high-level schema)
+
+- `data/tensor_inventory.*`: one row per observed tensor
+  - key columns: `file`, `tensor_name`, `dtype`, `shape`, `ndim`, `nbytes`
+  - when index mode is active: `in_index`, `index_shard`
+- `data/matrix_stats.*`: one row per extracted expert matrix
+  - key columns: `file`, `source_tensor`, `derived_tensor`, `layer`, `block4`, `proj`, `expert_id`, `rows`, `cols`
+  - includes numeric metrics like `mean_abs`, `max_abs`, `p99_abs`, and groupwise outlier ratios (e.g. `g32_*`)
+  - conventions: unknown `layer` is recorded as `-1`; shared experts use `expert_id = -1`
+- `data/quant_sim.*`: one row per (expert, scheme) simulation result
+  - key columns: `scheme`, `mode`, `bits`, `group_size`, `w_rel_fro`, `w_rel_max`, `scale_*`, `bias_*`, `error`
+  - if a scheme fails, rows are still emitted with `error` populated (so you can see coverage)
+
+## Safetensors index support (`model.safetensors.index.json`)
+
+If `scan.use_safetensors_index_json=true` and an index file exists (either
+`model.safetensors.index.json` or `*.safetensors.index.json` in the model directory),
+`collect_data.py` will prefer scanning only the shards referenced by the index.
+
+Note: if `model_path` points to a single shard file, index discovery is performed in the
+parent directory. If an index is found, scanning may expand to additional shards referenced
+by that index. The final decision is recorded in `logs/run_context.json` under `scan_plan`.
+
+When index mode is active:
+
+- `logs/index_report.json` lists missing/extra shards and missing/extra tensors.
+- `data/tensor_inventory.*` includes `in_index` and `index_shard` columns.
+- `logs/run_context.json` and `logs/run_health.json` include index status and counts.
+
+If `scan.strict_index=true`, missing indexed shards will cause a non-zero exit.
+
+## Troubleshooting
+
+- Parquet unexpectedly became CSV: check `logs/write_manifest.json` for the fallback `error`.
+- bfloat16 decode errors: install `ml-dtypes` (NumPy needs it to handle `"bfloat16"` from safetensors).
+- Packed split failures: set `parsing.strict_packed_split=false` to warn + fall back (see `logs/warnings.*`).
+- Index strictness: set `scan.strict_index=false` to warn + continue when shards are missing.
+- MLX missing or failing: set `mlx.enabled=false` to skip quant sims; errors and skips are recorded in `logs/warnings.*`.
+
+## Tests
+
+Run the test suite:
+
+- `make test`
+- `make verbose-test`
+
+Or directly:
+
+- `./.venv/bin/python -m unittest discover -s tests`
+
+## Config / metadata examples
+
+`example_safetensors_folder_metadata_convention_variance/.../` contains example
+`config.json` and `model.safetensors.index.json` files from various checkpoints and
+folder conventions. These are used as test assets and as planning/reference material.
