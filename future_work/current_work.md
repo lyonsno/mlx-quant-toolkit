@@ -1,27 +1,37 @@
 Remaining Identified Issues
 
-- `scripts/collect_data.py`: `proj_group` alias normalization still treats regex captures like `w1` as a distinct proj name; results can fragment aggregates by `proj`.
-- `scripts/collect_data.py`: `_iter_weight_files` assumes `model_path` is a directory; a single-file checkpoint path results in a 0-file scan.
+- `scripts/collect_data.py`: `packed_split.projs` values are not canonicalized through `parsing.proj_aliases` (e.g., ["w1","w2"] stays raw), which can silently fragment aggregates by `proj`.
+- `scripts/collect_data.py`: when `model_path` is a *file* and `scan.use_safetensors_index_json=true`, index discovery in the parent directory can expand the scan beyond that single file; this behavior is currently implicit and should be an explicit contract (and logged).
+- `scripts/collect_data.py`: fallback extraction is intentionally heuristic, but runs provide little visibility into how often it was used (risk: “plausible but wrong” axis assumptions). Add run-level visibility.
+- `scripts/collect_data.py`: `scan.strict_index` only enforces shard presence after a valid index parse; decide what “strict” means when the index is missing or invalid (fail vs warn + fallback).
 
 Planned Changes
 
-- Normalize `proj_group` captures through the same alias map used for inference (e.g., map `w1` -> `gate_proj`).
-- Optionally support `model_path` pointing directly to a single `.safetensors`/`.npz` file.
+- Canonicalize `packed_split.projs` via the same alias inference path used elsewhere:
+  - map known aliases -> canonical (`w1` -> `gate_proj`, etc.)
+  - when unknown: either warn + keep raw, or treat as strict failure (policy decision below).
+- Make file `model_path` + index behavior explicit:
+  - emit an explicit log line when a file path results in scanning multiple indexed shards
+  - add an integration test that locks down the chosen contract.
+- Add visibility for fallback usage:
+  - minimally: a single warning / summary count (“fallback_extract used for N tensors”)
+  - optionally: a column like `extraction_method = rule|fallback` in `matrix_stats` / `quant_sim`.
+- Clarify and enforce `strict_index` semantics:
+  - decide whether strict requires (a) index exists + parses, or (b) only enforces shard presence *if* an index is found
+  - encode the decision in behavior + tests.
 
 Open Questions
 
-- Should `model_path` accept a file path as first-class input, or remain directory-only?
-- Do you want `proj_group` normalization to be strict (only allow aliases) or permissive (allow raw names when unrecognized)?
+- File `model_path` with index present: should default behavior mean “scan only this file” or “treat file as an anchor and scan all index shards”? If the latter, what’s the minimal logging we require so it can’t be missed?
+- For `packed_split.projs` that don’t map to a canonical proj: should we (a) keep raw with a warning (permissive), or (b) drop/fail under strict mode to prevent fragmentation?
+
+Recently Resolved (doc drift cleanup)
+
+- `proj_group` captures are canonicalized via `parsing.proj_aliases` (tests: `tests/test_proj_group_normalization.py`).
+- `model_path` supports single-file checkpoints via `_iter_weight_files` (tests: `tests/test_proj_group_normalization.py`).
+- Delta math in `build_tables.py` is covered with deterministic values (tests: `tests/test_optional_mlx.py`).
 
 Optional Improvements
 
-- Strengthen the `tests/test_optional_mlx.py` coverage by validating delta math in
-  `scripts/build_tables.py`. The current test forces `delta_pairs` so
-  `B_quant_deltas.csv` is always emitted, but it uses scheme names that are not
-  present in the quant output, so the delta columns remain `None`. A more robust
-  check would configure `quant_schemes` with known names and provide a tiny,
-  deterministic `quant_sim` dataset (or run a minimal collect step with a stub
-  quant output) so both schemes appear in `quant_sim`. Then the test can assert
-  that `delta_w_rel_fro` and `delta_w_rel_max` equal the expected differences.
-  This ties the test directly to the README-documented behavior that
-  `delta_pairs` compares two schemes within the `B_*` tables.
+- Add `logs/run_health.json` summarizing: files scanned, tensors observed, extracted-by-rule vs fallback counts, unmatched count, and (if index-active) missing/extra shard/tensor counts.
+- Emit a warning when `delta_pairs` references schemes not present in `quant_sim` (helps catch typos early).
