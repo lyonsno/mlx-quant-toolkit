@@ -84,6 +84,36 @@ def _load_mlx():
     mx = mx_mod
     return mx
 
+
+def _utc_now_iso() -> str:
+    # Keep this as a simple ISO-ish UTC string so it stays human-readable and easy to parse.
+    # Example: "2026-01-06T12:34:56Z"
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _safe_read_json_dict(path: Path) -> Dict[str, Any]:
+    """
+    Best-effort JSON reader that returns {} on any failure.
+    Intended for optional run artifacts like manifest.json and metadata logs.
+    """
+    try:
+        raw = path.read_text()
+    except Exception:
+        return {}
+    if not raw.strip():
+        return {}
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_json(obj: Any, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(obj, indent=2, sort_keys=True))
+
+
 def _write_df(df: pd.DataFrame, path: Path, fmt: str, compression: str | None):
     path.parent.mkdir(parents=True, exist_ok=True)
     if fmt == "parquet":
@@ -698,6 +728,7 @@ def main():
 
     run_dir = Path(args.run_dir).expanduser().resolve()
     cfg = _load_config(run_dir)
+    manifest = _safe_read_json_dict(run_dir / "manifest.json")
 
     if args.model_path is not None:
         cfg["model_path"] = str(Path(args.model_path).expanduser().resolve())
@@ -747,6 +778,24 @@ def main():
     quant_rows: List[Dict[str, Any]] = []
     unmatched_rows: List[Dict[str, Any]] = []
     warn_log: List[str] = []
+
+    # Run-health summary accumulators.
+    #
+    # High-level goal: produce a compact "did this run look sane?" report that can be
+    # inspected quickly without loading large parquet/CSV artifacts.
+    extracted_by_rule = 0
+    extracted_by_fallback = 0
+    unmatched_expertish = 0
+    example_rule_extracted: List[str] = []
+    example_fallback_extracted: List[str] = []
+    example_unmatched_expertish: List[str] = []
+
+    def _record_example(dst: List[str], value: str, limit: int = 25) -> None:
+        if value in dst:
+            return
+        if len(dst) >= limit:
+            return
+        dst.append(value)
 
     if metadata_enabled:
         meta_mod = _get_metadata_module()
@@ -853,6 +902,8 @@ def main():
                                 extra_safetensors_files_on_disk.add(p.name)
                         extra_safetensors_files_on_disk -= expected_shards
 
+    index_ready = bool(index_active and weight_map is not None)
+
     if mlx_enabled and schemes:
         if _load_mlx() is None:
             msg = "mlx is not importable; skipping quantization simulations"
@@ -863,10 +914,11 @@ def main():
     files: List[Path] = []
     missing_shards: set[str] = set()
     scanned_shards: set[str] = set()
-    observed_tensors: set[str] = set()
+    observed_tensor_names: set[str] = set()
+    tensors_observed = 0
     path_to_shard_id: Dict[Path, str] = {}
 
-    if index_active:
+    if index_ready:
         path_to_shard_id = {path: shard for shard, path in expected_shard_paths.items()}
         for shard in sorted(expected_shards):
             path = expected_shard_paths[shard]
@@ -891,14 +943,15 @@ def main():
         if progress_every and (fi % progress_every == 0 or fi == 1):
             print(f"[collect] ({fi}/{len(files)}) {fpath}")
 
-        if index_active:
+        if index_ready:
             shard_id = path_to_shard_id.get(fpath)
             if shard_id is not None:
                 scanned_shards.add(shard_id)
 
         for name, arr in _iter_tensors_from_file(fpath):
-            if index_active:
-                observed_tensors.add(name)
+            tensors_observed += 1
+            if index_ready:
+                observed_tensor_names.add(name)
             # inventory
             if inventory_all:
                 try:
@@ -913,7 +966,7 @@ def main():
                     "ndim": int(arr.ndim),
                     "nbytes": nbytes
                 }
-                if index_active and weight_map is not None:
+                if index_ready:
                     row["in_index"] = name in weight_map
                     row["index_shard"] = weight_map.get(name)
                 inventory_rows.append(row)
@@ -933,6 +986,7 @@ def main():
 
             # try explicit rules, else fallback heuristics
             extracted = None
+            extracted_via: Optional[str] = None
             try:
                 extracted = _apply_rules(
                     name,
@@ -945,6 +999,8 @@ def main():
                     shared_keywords,
                     proj_group_strict,
                 )
+                if extracted is not None:
+                    extracted_via = "rule"
             except PackedSplitError as e:
                 if strict_packed_split:
                     raise
@@ -955,11 +1011,17 @@ def main():
             if extracted is None:
                 try:
                     extracted = _fallback_extract(name, arr, fpath, layer_re, expert_re, alias_map, shared_keywords)
+                    if extracted is not None:
+                        extracted_via = "fallback"
                 except Exception as e:
                     warn_log.append(f"[extract] fallback failed for {name}: {e}")
                     extracted = None
 
             if extracted is None:
+                if experts_only and is_expertish:
+                    unmatched_expertish += 1
+                    _record_example(example_unmatched_expertish, name)
+
                 if dump_unmatched and experts_only and is_expertish:
                     unmatched_rows.append({
                         "file": str(fpath),
@@ -970,6 +1032,13 @@ def main():
                         "reason": "no_rule_match_or_proj_infer"
                     })
                 continue
+
+            if extracted_via == "rule":
+                extracted_by_rule += 1
+                _record_example(example_rule_extracted, name)
+            elif extracted_via == "fallback":
+                extracted_by_fallback += 1
+                _record_example(example_fallback_extracted, name)
 
             for bank_obj in extracted:
                 bank = bank_obj.bank
@@ -1081,13 +1150,19 @@ def main():
                         layer_idx = (bank_obj.layer_base + li) if bank_obj.layer_base is not None else li
                         process_one(layer_idx=layer_idx, bank_erc=bank[li])
 
+    missing_shards_report: List[str] = []
+    extra_scanned_shards: List[str] = []
+    missing_tensors: List[str] = []
+    extra_tensors: List[str] = []
+    extra_on_disk: List[str] = []
+
     if index_active and weight_map is not None:
         expected_set = set(expected_shards)
         scanned_set = set(scanned_shards)
         missing_shards_report = sorted(expected_set - scanned_set)
         extra_scanned_shards = sorted(scanned_set - expected_set)
-        missing_tensors = sorted(set(weight_map.keys()) - observed_tensors)
-        extra_tensors = sorted(observed_tensors - set(weight_map.keys()))
+        missing_tensors = sorted(set(weight_map.keys()) - observed_tensor_names)
+        extra_tensors = sorted(observed_tensor_names - set(weight_map.keys()))
         extra_on_disk = sorted(extra_safetensors_files_on_disk)
 
         report = {
@@ -1117,6 +1192,10 @@ def main():
         if extra_on_disk:
             warn_log.append("[index] extra safetensors files on disk: " + ", ".join(extra_on_disk))
 
+    # Always write run-health report, even when index and metadata are disabled.
+    #
+    # This is deliberately JSON (not parquet/CSV) so it's quick to inspect and easy
+    # to parse from tools without knowing the configured output format.
     # write outputs
     fmt = cfg.get("output", {}).get("format", "parquet")
     compression = cfg.get("output", {}).get("compression", None)
@@ -1151,6 +1230,79 @@ def main():
         _write_df(wl_df, run_dir / "logs" / "warnings.parquet", fmt, compression)
 
     dt = time.time() - t0
+
+    outputs_written = {
+        "format": fmt,
+        "tensor_inventory_rows": int(len(inv_df)),
+        "matrix_stats_rows": int(len(ms_df)),
+        "quant_sim_rows": int(len(qs_df)),
+        "unmatched_tensors_rows": int(len(um_df)) if dump_unmatched else 0,
+        "warnings_rows": int(len(wl_df)),
+        "wrote_unmatched_tensors": bool(dump_unmatched),
+        "wrote_warnings": bool(not wl_df.empty),
+        "wrote_index_report": bool(index_ready),
+    }
+
+    index_summary: Dict[str, Any] = {
+        "active": bool(index_ready),
+        "index_path": str(index_path) if index_path is not None else None,
+        "strict_index": bool(strict_index),
+        "expected_shards_count": int(len(expected_shards)) if index_ready else 0,
+        "scanned_shards_count": int(len(scanned_shards)) if index_ready else 0,
+        "missing_shards_count": int(len(missing_shards_report)) if index_ready else 0,
+        "extra_scanned_shards_count": int(len(extra_scanned_shards)) if index_ready else 0,
+        "missing_tensors_count": int(len(missing_tensors)) if index_ready else 0,
+        "extra_tensors_count": int(len(extra_tensors)) if index_ready else 0,
+        "extra_safetensors_files_on_disk_count": int(len(extra_on_disk)) if index_ready else 0,
+    }
+    if index_metadata:
+        index_summary["index_metadata"] = index_metadata
+
+    run_health = {
+        "status": "success",
+        "generated_at": _utc_now_iso(),
+        "duration_seconds": float(dt),
+        "run": {
+            "run_dir": str(run_dir),
+            "model_id": manifest.get("model_id"),
+            "run_name": manifest.get("run_name"),
+            "created_at": manifest.get("created_at"),
+            "model_path": str(model_path),
+        },
+        "config_used": cfg,
+        "scan_summary": {
+            "files_scanned": int(len(files)),
+            "tensors_observed": int(tensors_observed),
+        },
+        "extraction_summary": {
+            "extracted_by_rule": int(extracted_by_rule),
+            "extracted_by_fallback": int(extracted_by_fallback),
+            "unmatched_expertish": int(unmatched_expertish),
+        },
+        "outputs_written": outputs_written,
+        "tensor_name_formats": {
+            "layer_regex": parsing.get("layer_regex"),
+            "expert_regex": parsing.get("expert_regex"),
+            "enabled_extract_rules": [
+                {"name": r.name, "match": r.regex.pattern, "ndim": r.ndim}
+                for r in rules
+                if r.enabled
+            ],
+            "proj_aliases": alias_map,
+        },
+        "tensor_name_examples": {
+            "rule_extracted": example_rule_extracted,
+            "fallback_extracted": example_fallback_extracted,
+            "unmatched_expertish": example_unmatched_expertish,
+        },
+        "derived_tensor_formats": [
+            "<raw_tensor_name>::<proj>",
+            "<raw_tensor_name>::split[rows]::<proj>",
+            "<raw_tensor_name>::split[cols]::<proj>",
+        ],
+        "index_summary": index_summary,
+    }
+    _write_json(run_health, run_dir / "logs" / "run_health.json")
     print(f"[collect] done in {dt:.1f}s")
     print(f"[collect] tensor_inventory rows: {len(inv_df)}")
     print(f"[collect] matrix_stats rows:     {len(ms_df)}")
