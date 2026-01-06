@@ -132,7 +132,7 @@ def init_run(root: Path, model_id: str, run_name: str, model_path: str | None) -
     manifest = {
         "model_id": model_id,
         "run_name": run_name,
-        "created_at": dt.datetime.utcnow().isoformat() + "Z",
+        "created_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
         "version": 2,
     }
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
