@@ -35,7 +35,13 @@ class SafetensorsIndexIntegrationTests(unittest.TestCase):
             text=True,
         )
 
-    def _write_config(self, run_dir: Path, model_dir: Path, use_index: bool, strict_index: bool) -> None:
+    def _write_config(
+        self,
+        run_dir: Path,
+        model_dir: Path,
+        use_index: bool | None,
+        strict_index: bool,
+    ) -> None:
         cfg = {
             "model_path": str(model_dir),
             "scan": {
@@ -44,7 +50,6 @@ class SafetensorsIndexIntegrationTests(unittest.TestCase):
                 "include_shared_expert": True,
                 "inventory_all_tensors": True,
                 "max_files": None,
-                "use_safetensors_index_json": use_index,
                 "strict_index": strict_index,
             },
             "parsing": {
@@ -73,6 +78,8 @@ class SafetensorsIndexIntegrationTests(unittest.TestCase):
             "output": {"format": "csv", "compression": None},
             "debug": {"dump_unmatched_tensors": True, "print_progress_every_files": 0},
         }
+        if use_index is not None:
+            cfg["scan"]["use_safetensors_index_json"] = use_index
         (run_dir / "analysis_config.json").write_text(json.dumps(cfg, indent=2))
 
     def _write_safetensors(self, path: Path, tensors: dict[str, np.ndarray]) -> None:
@@ -273,7 +280,7 @@ class SafetensorsIndexIntegrationTests(unittest.TestCase):
             output = (result.stdout or "") + (result.stderr or "")
             self.assertIn("shard2.safetensors", output)
 
-    def test_collect_data_without_index_keeps_inventory_schema(self):
+    def test_collect_data_missing_index_falls_back_without_inventory_enrichment(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             model_dir = tmp_path / "model"
@@ -287,6 +294,34 @@ class SafetensorsIndexIntegrationTests(unittest.TestCase):
             run_dir = tmp_path / "run"
             run_dir.mkdir(parents=True, exist_ok=True)
             self._write_config(run_dir, model_dir, use_index=True, strict_index=False)
+
+            self._run_collect(run_dir, self._env(), check=True)
+
+            inv_path = run_dir / "data" / "tensor_inventory.csv"
+            with inv_path.open(newline="") as handle:
+                reader = csv.DictReader(handle)
+                fieldnames = reader.fieldnames or []
+                rows = list(reader)
+
+            self.assertNotIn("in_index", fieldnames)
+            self.assertNotIn("index_shard", fieldnames)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["tensor_name"], t1)
+
+    def test_collect_data_without_index_flag_keeps_inventory_schema(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            t1 = "layers.0.experts.0.down_proj.weight"
+            arr = np.arange(4, dtype=np.float32).reshape(2, 2)
+
+            self._write_safetensors(model_dir / "weights.safetensors", {t1: arr})
+
+            run_dir = tmp_path / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, model_dir, use_index=None, strict_index=False)
 
             self._run_collect(run_dir, self._env(), check=True)
 
