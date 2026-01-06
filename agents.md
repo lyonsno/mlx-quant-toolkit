@@ -34,7 +34,7 @@ Your job as an agent: make small, correct, test-backed changes quickly, without 
 When a user request includes **tests + fix**, default to a two-phase approach.
 
 ### Phase 1 — Tests only (default safe posture)
-- Update your progress file continually as you work (append-only; see “Progress notes”).
+- Update your progress file **continually** as you work (append-only; see “Progress notes”).
 - Write the unit test(s) and/or acceptance test(s).
 - Ensure the tests would meaningfully fail on the pre-fix behavior.
 
@@ -67,6 +67,8 @@ Done when:
 
 If the user explicitly says “do it end-to-end in one go,” you can do both phases without stopping.
 
+## Phase 3 - Iteration
+- if new adjustments are requested, the process should start over from phase one, and stop for test review before preceding to implementation
 ---
 
 ## Ground rules (non-negotiable)
@@ -175,6 +177,15 @@ If false:
 - packed-split mismatch should **warn + fall back** (pipeline should still produce stats outputs).
 
 If you touch this behavior, you must update/extend tests.
+
+---
+
+## `logs/run_health.json` upkeep
+
+- This pipeline records relevant run health stats (files scanned, tensors observed, extracted-by-rule vs fallback counts, unmatched count, and (if index-active) missing/extra shard/tensor counts, config file settings at run time, model name if available, time, date, etc.) during every run.
+- If your change touches one of these metrics, make sure the accurate value still ends up in the `run_health.json` file.
+- If your change adds a stat or metric that would make sense to include in this file, state that you plan to include it and test for its presence.
+- If you are unsure if something you add belings in the file, **ASK THE USER AS SOON AS IT OCCURS TO YOU**
 
 ---
 
