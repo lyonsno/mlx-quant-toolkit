@@ -158,9 +158,11 @@ def _iter_tensors_from_file(path: Path) -> Iterable[Tuple[str, np.ndarray]]:
                         ) from e
                     raise
     elif path.suffix == ".npz":
-        data = np.load(str(path), allow_pickle=False)
-        for name in data.files:
-            yield name, data[name]
+        # `np.load(..., allow_pickle=False)` returns an `NpzFile` whose underlying file handle
+        # should be closed promptly to avoid file-descriptor pressure when scanning many shards.
+        with np.load(str(path), allow_pickle=False) as data:
+            for name in data.files:
+                yield name, data[name]
 
 
 def _normalize_shard_id(shard: str) -> str:
