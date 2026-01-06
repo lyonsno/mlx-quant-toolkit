@@ -163,6 +163,10 @@ def _iter_tensors_from_file(path: Path) -> Iterable[Tuple[str, np.ndarray]]:
             yield name, data[name]
 
 
+def _normalize_shard_id(shard: str) -> str:
+    return shard.replace("\\", "/")
+
+
 # ------------------------- parsing -------------------------------------------
 
 @dataclass
@@ -706,6 +710,8 @@ def main():
     experts_only = bool(scan_cfg.get("experts_only", True))
     include_shared = bool(scan_cfg.get("include_shared_expert", True))
     inventory_all = bool(scan_cfg.get("inventory_all_tensors", True))
+    use_index = bool(scan_cfg.get("use_safetensors_index_json", True))
+    strict_index = bool(scan_cfg.get("strict_index", False))
 
     parsing = cfg["parsing"]
     layer_re = re.compile(parsing["layer_regex"])
@@ -805,6 +811,46 @@ def main():
                     else:
                         warn_log.append(f"[meta] no recognized fields in {cfg_path}")
 
+    index_path = None
+    weight_map = None
+    index_metadata = {}
+    expected_shards: set[str] = set()
+    expected_shard_paths: Dict[str, Path] = {}
+    extra_safetensors_files_on_disk: set[str] = set()
+    index_active = False
+
+    if use_index:
+        index_mod = _get_metadata_module()
+        if index_mod is None:
+            warn_log.append("[index] metadata module unavailable; skipping index")
+        else:
+            find_fn = getattr(index_mod, "find_safetensors_index_json", None)
+            parse_fn = getattr(index_mod, "parse_safetensors_index", None)
+            if find_fn is None or parse_fn is None:
+                warn_log.append("[index] index helpers unavailable; skipping index")
+            else:
+                index_path = find_fn(model_path)
+                if index_path is not None and index_path.exists():
+                    try:
+                        weight_map, index_metadata = parse_fn(index_path)
+                        weight_map = {k: _normalize_shard_id(v) for k, v in weight_map.items()}
+                    except Exception as e:
+                        warn_log.append(f"[index] failed to parse index {index_path}: {e}")
+                        index_path = None
+                        weight_map = None
+                    else:
+                        index_active = True
+                        for shard in weight_map.values():
+                            if Path(shard).suffix in exts:
+                                expected_shards.add(shard)
+                        expected_shard_paths = {
+                            shard: index_path.parent / shard for shard in expected_shards
+                        }
+                        for p in index_path.parent.iterdir():
+                            if p.is_file() and p.suffix == ".safetensors":
+                                extra_safetensors_files_on_disk.add(p.name)
+                        extra_safetensors_files_on_disk -= expected_shards
+
     if mlx_enabled and schemes:
         if _load_mlx() is None:
             msg = "mlx is not importable; skipping quantization simulations"
@@ -812,8 +858,27 @@ def main():
             warn_log.append(f"[quant_sim] {msg}")
             mlx_enabled = False
 
-    files = list(_iter_weight_files(model_path, exts))
-    files.sort()
+    files: List[Path] = []
+    missing_shards: set[str] = set()
+    scanned_shards: set[str] = set()
+    observed_tensors: set[str] = set()
+    path_to_shard_id: Dict[Path, str] = {}
+
+    if index_active:
+        path_to_shard_id = {path: shard for shard, path in expected_shard_paths.items()}
+        for shard in sorted(expected_shards):
+            path = expected_shard_paths[shard]
+            if path.exists():
+                files.append(path)
+            else:
+                missing_shards.add(shard)
+        if missing_shards:
+            msg = "[index] missing shard(s) referenced by index: " + ", ".join(sorted(missing_shards))
+            if strict_index:
+                raise SystemExit(msg)
+    else:
+        files = list(_iter_weight_files(model_path, exts))
+        files.sort()
     if max_files is not None:
         files = files[: int(max_files)]
 
@@ -824,21 +889,32 @@ def main():
         if progress_every and (fi % progress_every == 0 or fi == 1):
             print(f"[collect] ({fi}/{len(files)}) {fpath}")
 
+        if index_active:
+            shard_id = path_to_shard_id.get(fpath)
+            if shard_id is not None:
+                scanned_shards.add(shard_id)
+
         for name, arr in _iter_tensors_from_file(fpath):
+            if index_active:
+                observed_tensors.add(name)
             # inventory
             if inventory_all:
                 try:
                     nbytes = int(arr.nbytes)
                 except Exception:
                     nbytes = None
-                inventory_rows.append({
+                row = {
                     "file": str(fpath),
                     "tensor_name": name,
                     "dtype": str(arr.dtype),
                     "shape": tuple(arr.shape),
                     "ndim": int(arr.ndim),
                     "nbytes": nbytes
-                })
+                }
+                if index_active and weight_map is not None:
+                    row["in_index"] = name in weight_map
+                    row["index_shard"] = weight_map.get(name)
+                inventory_rows.append(row)
 
             # only float weights for stats/sims
             if not _is_floatlike_dtype(arr.dtype):
@@ -1002,6 +1078,42 @@ def main():
                     for li in range(L):
                         layer_idx = (bank_obj.layer_base + li) if bank_obj.layer_base is not None else li
                         process_one(layer_idx=layer_idx, bank_erc=bank[li])
+
+    if index_active and weight_map is not None:
+        expected_set = set(expected_shards)
+        scanned_set = set(scanned_shards)
+        missing_shards_report = sorted(expected_set - scanned_set)
+        extra_scanned_shards = sorted(scanned_set - expected_set)
+        missing_tensors = sorted(set(weight_map.keys()) - observed_tensors)
+        extra_tensors = sorted(observed_tensors - set(weight_map.keys()))
+        extra_on_disk = sorted(extra_safetensors_files_on_disk)
+
+        report = {
+            "expected_shards": sorted(expected_set),
+            "scanned_shards": sorted(scanned_set),
+            "missing_shards": missing_shards_report,
+            "extra_scanned_shards": extra_scanned_shards,
+            "missing_tensors": missing_tensors,
+            "extra_tensors": extra_tensors,
+            "extra_safetensors_files_on_disk": extra_on_disk,
+        }
+        if index_metadata:
+            report["index_metadata"] = index_metadata
+
+        logs_dir = run_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        (logs_dir / "index_report.json").write_text(json.dumps(report, indent=2))
+
+        if missing_shards_report:
+            warn_log.append("[index] missing shards: " + ", ".join(missing_shards_report))
+        if extra_scanned_shards:
+            warn_log.append("[index] extra scanned shards: " + ", ".join(extra_scanned_shards))
+        if missing_tensors:
+            warn_log.append("[index] missing tensors: " + ", ".join(missing_tensors))
+        if extra_tensors:
+            warn_log.append("[index] extra tensors: " + ", ".join(extra_tensors))
+        if extra_on_disk:
+            warn_log.append("[index] extra safetensors files on disk: " + ", ".join(extra_on_disk))
 
     # write outputs
     fmt = cfg.get("output", {}).get("format", "parquet")

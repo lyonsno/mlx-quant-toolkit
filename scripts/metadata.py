@@ -5,7 +5,7 @@ import re
 from dataclasses import asdict, dataclass
 from numbers import Integral
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 _LAYER_KEYS = ["num_hidden_layers", "n_layer", "num_layers"]
 _HIDDEN_KEYS = ["hidden_size", "d_model"]
@@ -76,6 +76,57 @@ def parse_config_json(path: Path) -> Dict[str, Any]:
         return {}
 
     return data
+
+
+def find_safetensors_index_json(model_path: Path) -> Optional[Path]:
+    if model_path.is_file():
+        base = model_path.parent
+    else:
+        base = model_path
+
+    root_index = base / "model.safetensors.index.json"
+    if root_index.is_file():
+        return root_index
+
+    matches = sorted(base.glob("*.safetensors.index.json"))
+    if matches:
+        return matches[0]
+    return None
+
+
+def parse_safetensors_index(path: Path) -> Tuple[Dict[str, str], Dict[str, Any]]:
+    try:
+        raw = path.read_text()
+    except Exception as e:
+        raise ValueError(f"unable to read index: {e}") from e
+
+    if not raw.strip():
+        raise ValueError("index file is empty")
+
+    try:
+        data = json.loads(raw)
+    except Exception as e:
+        raise ValueError(f"invalid JSON in index: {e}") from e
+
+    if not isinstance(data, dict):
+        raise ValueError("index JSON must be an object")
+
+    weight_map = data.get("weight_map")
+    if not isinstance(weight_map, dict):
+        raise ValueError("index JSON missing weight_map")
+
+    out: Dict[str, str] = {}
+    for k, v in weight_map.items():
+        if isinstance(k, str) and isinstance(v, str):
+            out[k] = v
+        else:
+            raise ValueError("index weight_map must map string tensor names to string shard names")
+
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    return out, metadata
 
 
 def trim_config_for_log(config: Dict[str, Any], max_chars: int = 200_000) -> Dict[str, Any]:

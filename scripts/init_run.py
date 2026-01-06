@@ -19,6 +19,8 @@ DEFAULT_CONFIG = {
     "experts_only": True,
     "include_shared_expert": True,
     "inventory_all_tensors": True,
+    "use_safetensors_index_json": True,
+    "strict_index": False,
     "max_files": None
   },
 
