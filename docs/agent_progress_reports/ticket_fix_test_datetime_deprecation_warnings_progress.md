@@ -7,3 +7,6 @@ Open questions/ambiguities: none.
 Risk of test loophole: low; change is isolated to timestamp formatting.
 Commands run: rg -n "utcnow()" scripts (found usage).
 Tests: not run (user requested quick fix without adding tests).
+
+## commit
+[main f0d1dc7] eliminate console deprecation warnings from the tests
