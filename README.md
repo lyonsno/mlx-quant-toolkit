@@ -46,3 +46,7 @@ Outputs
   and optional `unmatched_tensors` and `warnings`.
 - `runs/.../tables/` includes aggregated summaries for weight stats and quant
   sims, plus optional delta tables between schemes.
+
+Config / Metadata Examples
+
+- `example_safetensors_folder_metadata_convention_variance/.../` includes examples of configs (`config.json`, `model.safetensors.index.json`) for various architectures and checkpoints, organized in nested folders. They demonstrate what might be available and also indicate the range of potential variance. These can be used as test assets or for planning reference.

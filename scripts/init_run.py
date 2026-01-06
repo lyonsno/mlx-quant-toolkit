@@ -19,6 +19,8 @@ DEFAULT_CONFIG = {
     "experts_only": True,
     "include_shared_expert": True,
     "inventory_all_tensors": True,
+    "use_safetensors_index_json": True,
+    "strict_index": False,
     "max_files": None
   },
 
@@ -33,7 +35,14 @@ DEFAULT_CONFIG = {
     },
 
     "shared_expert_keywords": ["shared", "expert"],
-    "strict_packed_split": True
+    "strict_packed_split": True,
+    "proj_group_strict": False
+  },
+
+  "metadata": {
+    "enabled": True,
+    "mode": "validate",
+    "config_path": None
   },
 
   "extract_rules": [

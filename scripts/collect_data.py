@@ -12,6 +12,7 @@ Override model path if you want:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -26,10 +27,7 @@ import numpy as np
 import pandas as pd
 from safetensors import safe_open
 
-try:
-    import mlx.core as mx
-except Exception:
-    mx = None
+mx = None
 
 
 # bfloat16 handling for safetensors -> numpy paths
@@ -75,6 +73,17 @@ def _is_floatlike_dtype(dtype: np.dtype) -> bool:
 
 # ------------------------- IO helpers ----------------------------------------
 
+def _load_mlx():
+    global mx
+    if mx is not None:
+        return mx
+    try:
+        import mlx.core as mx_mod
+    except Exception:
+        return None
+    mx = mx_mod
+    return mx
+
 def _write_df(df: pd.DataFrame, path: Path, fmt: str, compression: str | None):
     path.parent.mkdir(parents=True, exist_ok=True)
     if fmt == "parquet":
@@ -95,7 +104,35 @@ def _load_config(run_dir: Path) -> Dict[str, Any]:
     return json.loads(cfg_path.read_text())
 
 
+_METADATA_MODULE = None
+_METADATA_LOADED = False
+
+
+def _get_metadata_module() -> Optional[Any]:
+    global _METADATA_MODULE, _METADATA_LOADED
+    if _METADATA_LOADED:
+        return _METADATA_MODULE
+    _METADATA_LOADED = True
+
+    path = Path(__file__).resolve().parent / "metadata.py"
+    if not path.exists():
+        _METADATA_MODULE = None
+        return None
+
+    spec = importlib.util.spec_from_file_location("metadata", path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _METADATA_MODULE = module
+    return module
+
+
 def _iter_weight_files(model_path: Path, exts: List[str]) -> Iterable[Path]:
+    if model_path.is_file():
+        if model_path.suffix in exts:
+            yield model_path
+        return
     for root, _, files in os.walk(model_path):
         for fn in files:
             p = Path(root) / fn
@@ -124,6 +161,10 @@ def _iter_tensors_from_file(path: Path) -> Iterable[Tuple[str, np.ndarray]]:
         data = np.load(str(path), allow_pickle=False)
         for name in data.files:
             yield name, data[name]
+
+
+def _normalize_shard_id(shard: str) -> str:
+    return shard.replace("\\", "/")
 
 
 # ------------------------- parsing -------------------------------------------
@@ -181,8 +222,14 @@ def _infer_proj(name: str, alias_map: Dict[str, List[str]]) -> Optional[str]:
     n = name.lower()
     for canonical, aliases in alias_map.items():
         for a in aliases:
-            if a.lower() in n:
-                return canonical
+            alias = a.lower()
+            if alias.startswith(".") and alias.endswith("."):
+                if alias in n:
+                    return canonical
+            else:
+                pattern = r"(?<![A-Za-z0-9_])" + re.escape(alias) + r"(?![A-Za-z0-9_])"
+                if re.search(pattern, n):
+                    return canonical
     return None
 
 
@@ -272,6 +319,7 @@ def _apply_rules(
     expert_re: re.Pattern,
     alias_map: Dict[str, List[str]],
     shared_keywords: List[str],
+    proj_group_strict: bool,
 ) -> Optional[List[ExtractedBank]]:
     for r in rules:
         if not r.enabled:
@@ -296,7 +344,11 @@ def _apply_rules(
         if r.packed_split is None:
             if r.proj_group is not None:
                 raw = m.group(r.proj_group)
-                proj = _infer_proj(raw, {k: [k] for k in alias_map.keys()}) or raw
+                proj = _infer_proj(raw, alias_map)
+                if proj is None:
+                    if proj_group_strict:
+                        return None
+                    proj = raw
             else:
                 proj = _infer_proj(name, alias_map)
             if proj is None:
@@ -505,25 +557,26 @@ def _mlx_quant_sim(
     eps = float(cfg_stats["eps"])
     warns: List[str] = []
 
-    if mx is None:
+    mx_mod = _load_mlx()
+    if mx_mod is None:
         msg = "mlx is not importable; skipping quantization simulation"
         warnings.warn(msg)
         return pd.DataFrame(columns=QUANT_SIM_COLUMNS), [msg]
 
     if device == "cpu":
         try:
-            mx.set_default_device(mx.cpu)
+            mx_mod.set_default_device(mx_mod.cpu)
         except Exception:
             pass
     elif device == "gpu":
         try:
-            mx.set_default_device(mx.gpu)
+            mx_mod.set_default_device(mx_mod.gpu)
         except Exception:
             pass
 
     # Use float16 to reduce memory; errors are relative so OK for ranking.
     w = bank.astype(np.float16, copy=False)
-    w_mx = mx.array(w)
+    w_mx = mx_mod.array(w)
 
     rows = []
     for s in schemes:
@@ -535,14 +588,14 @@ def _mlx_quant_sim(
         group_size = int(s.get("group_size", 32))
 
         try:
-            q = mx.quantize(w_mx, group_size=group_size, bits=bits, mode=mode)  #
+            q = mx_mod.quantize(w_mx, group_size=group_size, bits=bits, mode=mode)  #
             if mode == "affine":
                 wq, scales, biases = q
             else:
                 wq, scales = q
                 biases = None
 
-            w_hat = mx.dequantize(
+            w_hat = mx_mod.dequantize(
                 wq, scales, biases,
                 group_size=group_size, bits=bits, mode=mode,
                 dtype=w_mx.dtype
@@ -550,42 +603,42 @@ def _mlx_quant_sim(
 
             diff = w_hat - w_mx
 
-            num = mx.sqrt(mx.sum(diff * diff, axis=(1, 2)))
-            den = mx.sqrt(mx.sum(w_mx * w_mx, axis=(1, 2))) + eps
+            num = mx_mod.sqrt(mx_mod.sum(diff * diff, axis=(1, 2)))
+            den = mx_mod.sqrt(mx_mod.sum(w_mx * w_mx, axis=(1, 2))) + eps
             rel_fro = num / den
 
-            rel_max = mx.max(mx.abs(diff), axis=(1, 2)) / (mx.max(mx.abs(w_mx), axis=(1, 2)) + eps)
+            rel_max = mx_mod.max(mx_mod.abs(diff), axis=(1, 2)) / (mx_mod.max(mx_mod.abs(w_mx), axis=(1, 2)) + eps)
 
             # scale/bias stats (useful for diagnosing "why is this matrix hard?")
-            s_mean = mx.mean(scales, axis=tuple(range(scales.ndim))[0:scales.ndim-0])  # placeholder
+            s_mean = mx_mod.mean(scales, axis=tuple(range(scales.ndim))[0:scales.ndim-0])  # placeholder
             # Instead of guessing axis, do per-expert reduction explicitly:
             # scales shape is usually (E,R,C//G) for 3D input, so reduce axes (1,2)
             if scales.ndim >= 3:
-                scales_mean = mx.mean(scales, axis=(1, 2))
-                scales_max = mx.max(scales, axis=(1, 2))
+                scales_mean = mx_mod.mean(scales, axis=(1, 2))
+                scales_max = mx_mod.max(scales, axis=(1, 2))
             else:
                 # fallback
-                scales_mean = mx.mean(scales, axis=0)
-                scales_max = mx.max(scales, axis=0)
+                scales_mean = mx_mod.mean(scales, axis=0)
+                scales_max = mx_mod.max(scales, axis=0)
 
             if biases is not None:
                 if biases.ndim >= 3:
-                    biases_mean = mx.mean(biases, axis=(1, 2))
-                    biases_max = mx.max(biases, axis=(1, 2))
+                    biases_mean = mx_mod.mean(biases, axis=(1, 2))
+                    biases_max = mx_mod.max(biases, axis=(1, 2))
                 else:
-                    biases_mean = mx.mean(biases, axis=0)
-                    biases_max = mx.max(biases, axis=0)
+                    biases_mean = mx_mod.mean(biases, axis=0)
+                    biases_max = mx_mod.max(biases, axis=0)
             else:
                 biases_mean = None
                 biases_max = None
 
-            mx.eval(rel_fro, rel_max, scales_mean, scales_max)
+            mx_mod.eval(rel_fro, rel_max, scales_mean, scales_max)
             rel_fro_np = np.array(rel_fro).astype(np.float32)
             rel_max_np = np.array(rel_max).astype(np.float32)
             scales_mean_np = np.array(scales_mean).astype(np.float32)
             scales_max_np = np.array(scales_max).astype(np.float32)
             if biases_mean is not None:
-                mx.eval(biases_mean, biases_max)
+                mx_mod.eval(biases_mean, biases_max)
                 biases_mean_np = np.array(biases_mean).astype(np.float32)
                 biases_max_np = np.array(biases_max).astype(np.float32)
             else:
@@ -657,6 +710,8 @@ def main():
     experts_only = bool(scan_cfg.get("experts_only", True))
     include_shared = bool(scan_cfg.get("include_shared_expert", True))
     inventory_all = bool(scan_cfg.get("inventory_all_tensors", True))
+    use_index = bool(scan_cfg.get("use_safetensors_index_json", True))
+    strict_index = bool(scan_cfg.get("strict_index", False))
 
     parsing = cfg["parsing"]
     layer_re = re.compile(parsing["layer_regex"])
@@ -664,6 +719,7 @@ def main():
     alias_map = parsing["proj_aliases"]
     shared_keywords = parsing.get("shared_expert_keywords", ["shared", "expert"])
     strict_packed_split = bool(parsing.get("strict_packed_split", True))
+    proj_group_strict = bool(parsing.get("proj_group_strict", False))
 
     rules = _compile_rules(cfg)
 
@@ -679,6 +735,10 @@ def main():
     dump_unmatched = bool(debug_cfg.get("dump_unmatched_tensors", True))
     progress_every = int(debug_cfg.get("print_progress_every_files", 1))
 
+    metadata_cfg = cfg.get("metadata", {})
+    metadata_enabled = bool(metadata_cfg.get("enabled", False))
+    metadata_config_path = metadata_cfg.get("config_path", None)
+
     # output collectors
     inventory_rows: List[Dict[str, Any]] = []
     matrix_rows: List[Dict[str, Any]] = []
@@ -686,14 +746,139 @@ def main():
     unmatched_rows: List[Dict[str, Any]] = []
     warn_log: List[str] = []
 
-    if mlx_enabled and schemes and mx is None:
-        msg = "mlx is not importable; skipping quantization simulations"
-        warnings.warn(msg)
-        warn_log.append(f"[quant_sim] {msg}")
-        mlx_enabled = False
+    if metadata_enabled:
+        meta_mod = _get_metadata_module()
+        if meta_mod is None:
+            warn_log.append("[meta] metadata module unavailable; skipping")
+        else:
+            cfg_path = None
+            if metadata_config_path:
+                override = Path(metadata_config_path).expanduser()
+                if not override.is_absolute():
+                    base = model_path if model_path.is_dir() else model_path.parent
+                    override = base / override
+                override = override.resolve()
+                if override.exists():
+                    cfg_path = override
+                else:
+                    warn_log.append(f"[meta] config_path not found: {override}")
 
-    files = list(_iter_weight_files(model_path, exts))
-    files.sort()
+            if cfg_path is None:
+                cfg_path = meta_mod.find_config_json(model_path)
+
+            if cfg_path is None or not cfg_path.exists():
+                warn_log.append("[meta] config.json not found; skipping")
+            else:
+                parsed = meta_mod.parse_config_json(cfg_path)
+                if not parsed:
+                    warn_log.append(f"[meta] config.json empty or invalid: {cfg_path}")
+                else:
+                    budget = meta_mod.ModelShapeBudget.from_config_dict(parsed)
+                    shape_budget = budget.to_dict()
+                    raw_cfg = meta_mod.trim_config_for_log(parsed)
+
+                    logs_dir = run_dir / "logs"
+                    logs_dir.mkdir(parents=True, exist_ok=True)
+                    (logs_dir / "model_config.raw.json").write_text(
+                        json.dumps(raw_cfg, indent=2)
+                    )
+                    (logs_dir / "model_shape_budget.json").write_text(
+                        json.dumps(
+                            {
+                                "config_path": str(cfg_path),
+                                "shape_budget": shape_budget,
+                            },
+                            indent=2,
+                        )
+                    )
+
+                    parts = []
+                    if budget.hidden_size is not None:
+                        parts.append(f"hidden={budget.hidden_size}")
+                    if budget.num_hidden_layers is not None:
+                        parts.append(f"layers={budget.num_hidden_layers}")
+                    if budget.moe_intermediate_size is not None:
+                        parts.append(f"moe_int={budget.moe_intermediate_size}")
+                    if budget.shared_expert_intermediate_size is not None:
+                        parts.append(f"shared_int={budget.shared_expert_intermediate_size}")
+                    if budget.num_experts is not None:
+                        parts.append(f"experts={budget.num_experts}")
+                    if budget.num_experts_per_tok is not None:
+                        parts.append(f"topk={budget.num_experts_per_tok}")
+
+                    if parts:
+                        print("[meta] " + " ".join(parts))
+                    else:
+                        warn_log.append(f"[meta] no recognized fields in {cfg_path}")
+
+    index_path = None
+    weight_map = None
+    index_metadata = {}
+    expected_shards: set[str] = set()
+    expected_shard_paths: Dict[str, Path] = {}
+    extra_safetensors_files_on_disk: set[str] = set()
+    index_active = False
+
+    if use_index:
+        index_mod = _get_metadata_module()
+        if index_mod is None:
+            warn_log.append("[index] metadata module unavailable; skipping index")
+        else:
+            find_fn = getattr(index_mod, "find_safetensors_index_json", None)
+            parse_fn = getattr(index_mod, "parse_safetensors_index", None)
+            if find_fn is None or parse_fn is None:
+                warn_log.append("[index] index helpers unavailable; skipping index")
+            else:
+                index_path = find_fn(model_path)
+                if index_path is not None and index_path.exists():
+                    try:
+                        weight_map, index_metadata = parse_fn(index_path)
+                        weight_map = {k: _normalize_shard_id(v) for k, v in weight_map.items()}
+                    except Exception as e:
+                        warn_log.append(f"[index] failed to parse index {index_path}: {e}")
+                        index_path = None
+                        weight_map = None
+                    else:
+                        index_active = True
+                        for shard in weight_map.values():
+                            if Path(shard).suffix in exts:
+                                expected_shards.add(shard)
+                        expected_shard_paths = {
+                            shard: index_path.parent / shard for shard in expected_shards
+                        }
+                        for p in index_path.parent.iterdir():
+                            if p.is_file() and p.suffix == ".safetensors":
+                                extra_safetensors_files_on_disk.add(p.name)
+                        extra_safetensors_files_on_disk -= expected_shards
+
+    if mlx_enabled and schemes:
+        if _load_mlx() is None:
+            msg = "mlx is not importable; skipping quantization simulations"
+            warnings.warn(msg)
+            warn_log.append(f"[quant_sim] {msg}")
+            mlx_enabled = False
+
+    files: List[Path] = []
+    missing_shards: set[str] = set()
+    scanned_shards: set[str] = set()
+    observed_tensors: set[str] = set()
+    path_to_shard_id: Dict[Path, str] = {}
+
+    if index_active:
+        path_to_shard_id = {path: shard for shard, path in expected_shard_paths.items()}
+        for shard in sorted(expected_shards):
+            path = expected_shard_paths[shard]
+            if path.exists():
+                files.append(path)
+            else:
+                missing_shards.add(shard)
+        if missing_shards:
+            msg = "[index] missing shard(s) referenced by index: " + ", ".join(sorted(missing_shards))
+            if strict_index:
+                raise SystemExit(msg)
+    else:
+        files = list(_iter_weight_files(model_path, exts))
+        files.sort()
     if max_files is not None:
         files = files[: int(max_files)]
 
@@ -704,21 +889,32 @@ def main():
         if progress_every and (fi % progress_every == 0 or fi == 1):
             print(f"[collect] ({fi}/{len(files)}) {fpath}")
 
+        if index_active:
+            shard_id = path_to_shard_id.get(fpath)
+            if shard_id is not None:
+                scanned_shards.add(shard_id)
+
         for name, arr in _iter_tensors_from_file(fpath):
+            if index_active:
+                observed_tensors.add(name)
             # inventory
             if inventory_all:
                 try:
                     nbytes = int(arr.nbytes)
                 except Exception:
                     nbytes = None
-                inventory_rows.append({
+                row = {
                     "file": str(fpath),
                     "tensor_name": name,
                     "dtype": str(arr.dtype),
                     "shape": tuple(arr.shape),
                     "ndim": int(arr.ndim),
                     "nbytes": nbytes
-                })
+                }
+                if index_active and weight_map is not None:
+                    row["in_index"] = name in weight_map
+                    row["index_shard"] = weight_map.get(name)
+                inventory_rows.append(row)
 
             # only float weights for stats/sims
             if not _is_floatlike_dtype(arr.dtype):
@@ -745,6 +941,7 @@ def main():
                     expert_re,
                     alias_map,
                     shared_keywords,
+                    proj_group_strict,
                 )
             except PackedSplitError as e:
                 if strict_packed_split:
@@ -881,6 +1078,42 @@ def main():
                     for li in range(L):
                         layer_idx = (bank_obj.layer_base + li) if bank_obj.layer_base is not None else li
                         process_one(layer_idx=layer_idx, bank_erc=bank[li])
+
+    if index_active and weight_map is not None:
+        expected_set = set(expected_shards)
+        scanned_set = set(scanned_shards)
+        missing_shards_report = sorted(expected_set - scanned_set)
+        extra_scanned_shards = sorted(scanned_set - expected_set)
+        missing_tensors = sorted(set(weight_map.keys()) - observed_tensors)
+        extra_tensors = sorted(observed_tensors - set(weight_map.keys()))
+        extra_on_disk = sorted(extra_safetensors_files_on_disk)
+
+        report = {
+            "expected_shards": sorted(expected_set),
+            "scanned_shards": sorted(scanned_set),
+            "missing_shards": missing_shards_report,
+            "extra_scanned_shards": extra_scanned_shards,
+            "missing_tensors": missing_tensors,
+            "extra_tensors": extra_tensors,
+            "extra_safetensors_files_on_disk": extra_on_disk,
+        }
+        if index_metadata:
+            report["index_metadata"] = index_metadata
+
+        logs_dir = run_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        (logs_dir / "index_report.json").write_text(json.dumps(report, indent=2))
+
+        if missing_shards_report:
+            warn_log.append("[index] missing shards: " + ", ".join(missing_shards_report))
+        if extra_scanned_shards:
+            warn_log.append("[index] extra scanned shards: " + ", ".join(extra_scanned_shards))
+        if missing_tensors:
+            warn_log.append("[index] missing tensors: " + ", ".join(missing_tensors))
+        if extra_tensors:
+            warn_log.append("[index] extra tensors: " + ", ".join(extra_tensors))
+        if extra_on_disk:
+            warn_log.append("[index] extra safetensors files on disk: " + ", ".join(extra_on_disk))
 
     # write outputs
     fmt = cfg.get("output", {}).get("format", "parquet")

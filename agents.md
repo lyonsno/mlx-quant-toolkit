@@ -29,38 +29,93 @@ Your job as an agent: make small, correct, test-backed changes quickly, without 
 
 ---
 
+## Workflow protocol (default linear loop)
+
+When a user request includes **tests + fix**, default to a two-phase approach.
+
+### Phase 1 — Tests only (default safe posture)
+- Update your progress file continually as you work (append-only; see “Progress notes”).
+- Write the unit test(s) and/or acceptance test(s).
+- Ensure the tests would meaningfully fail on the pre-fix behavior.
+
+Stop and report:
+- what tests you added (files + intent),
+- the exact exception / failure message you expect on pre-fix (or the missing symbol / wrong output shape),
+- one sentence on why this failure demonstrates the test is non-vacuous,
+- if you can run tests, run them and paste a short excerpt of the failing output (no walls of text, just the key line),
+- if you cannot run tests, say what prevented it (missing dependency, environment, etc.), not just “not run.”
+
+Done when:
+- tests exist,
+- they fail for the intended reason pre-fix (either observed by running, or described precisely),
+- your progress note reflects what you did and any assumptions/ambiguities you hit.
+
+### Phase 2 — Implementation
+- Implement the smallest fix that makes the Phase 1 tests pass.
+- Run the test command(s) again.
+
+Report:
+- what changed (files + short description),
+- why it fixes the failing tests,
+- what commands you ran and the outcome,
+- any behavior changes and any new/changed output artifacts.
+
+Done when:
+- tests pass,
+- CLI pipeline still runs on a tiny fixture,
+- diff stays within ticket scope (or extra scope is justified explicitly).
+
+If the user explicitly says “do it end-to-end in one go,” you can do both phases without stopping.
+
+---
+
 ## Ground rules (non-negotiable)
 
-1. **Do not introduce a new test framework.**
-   - Tests are `unittest`-style. Keep it consistent.
+1) **Do not introduce a new test framework.**
+- Tests are `unittest`-style. Keep it consistent.
 
-2. **Keep tests fast and deterministic.**
-   - Small arrays, small temporary fixtures, no network, no giant model downloads.
+2) **Keep tests fast and deterministic.**
+- Small arrays, small temporary fixtures, no network, no giant model downloads.
 
-3. **Respect optional dependencies.**
-   - `mlx` is optional. The pipeline must still run and write outputs when MLX is unavailable.
-   - Tests should avoid requiring real MLX; prefer stubs.
+3) **Respect optional dependencies.**
+- `mlx` is optional. The pipeline must still run and write outputs when MLX is unavailable.
+- Tests should avoid requiring real MLX; prefer stubs.
 
-4. **Avoid “tests that merely look good.”**
-   - Don’t write vacuous/self-passing tests (e.g., only checking a file exists).
-   - Prefer asserting concrete invariants: shapes, columns, row counts, warnings/errors emitted, numeric identities on tiny examples.
-   - Use this checklist whenever applicable.
-   	•	Does this test assert row counts (not just file existence)?
-	•	Does it assert key columns and at least one meaningful value?
-	•	Does it avoid depending on print formatting?
-	•	If randomness exists, did you force determinism (e.g., sample_k >= total)?
+4) **Prefer minimal diffs / limited blast radius.**
+- No drive-by refactors unless explicitly requested.
+- If you touch files not required by the ticket, justify each extra file in the progress log (one sentence each).
+- No formatting-only diffs outside the touched module(s).
 
-5. **Prefer minimal diffs.**
-   - No drive-by refactors unless explicitly requested.
+---
+
+## Anti-vacuity and anti-sandbagging checklist (use whenever applicable)
+
+Avoid “tests that merely look good.” Don’t write vacuous/self-passing tests (e.g., only checking a file exists).
+Prefer asserting concrete invariants: shapes, columns, row counts, warnings/errors emitted, numeric identities on tiny examples.
+
+Ask yourself:
+- Does this test assert row counts (not just file existence)?
+- Does it assert key columns and at least one meaningful value?
+- Does it avoid depending on print formatting?
+- If randomness exists, did you force determinism (e.g., set sample_k >= total or fix the seed)?
+
+Ticket-specific guardrails:
+- Every ticket that changes scanning/selection/filtering must include at least one “poison pill” / “fail-if-touched” fixture.
+  - Example: add an extra file that is invalid so the run only succeeds if the scanner truly ignores it.
+  - Prefer invalid content over permission/chmod tricks for portability.
+- Every ticket that introduces a report (index_report, warnings, etc.) must include at least one test where each category is non-empty (when feasible).
+  - Example: don’t only assert `extra_tensors == []`; force a scenario where it’s `["…"]`.
+- For any new config key: add a test for “key absent behaves sensibly” (backward compatibility with older configs).
 
 ---
 
 ## How to run things (try these in order)
 
 ### Run unit tests (preferred)
-- `uv run make test`  
+- `uv run make test`
 - If `uv` is unavailable: `make test`
-- for verbose replace `make test` with make `verbose-test`
+- For verbose output: `make verbose-test`
+- If one-time network permissions are needed to enable running tests in your environment, request it.
 
 ### Run a specific test module
 - `uv run python -m unittest tests.test_split_along_axis`
@@ -123,55 +178,39 @@ If you touch this behavior, you must update/extend tests.
 
 ---
 
-## Workflow protocol (fits a linear loop)
-
-When a user request includes **tests + fix**, default to a two-phase approach:
-
-### Phase 1 — Tests only (default safe posture)
-- Write the unit test(s) and/or acceptance test(s).
-- Ensure the tests would meaningfully fail on the pre-fix behavior.
-- Stop and report:
-  - what tests you added,
-  - what failure you expect (and why),
-  - what command(s) to run.
-
-### Phase 2 — Implementation
-- Implement the smallest fix that makes the tests pass.
-- Run the test command(s) again.
-- Report:
-  - what changed,
-  - why it fixes the failing tests,
-  - what commands you ran and the outcome.
-
-If the user explicitly says “do it end-to-end in one go,” you can do both phases without stopping.
-
----
-
 ## Progress notes (lightweight but persistent)
 
-For each ticket/issue, create or update:
+For each ticket/issue, create (if necessary), and then update as you work:
 - `docs/agent_progress_reports/<ticket_slug>_progress.md`
-- continually update the file as you work, not only at the end.
+
+Append-only rules:
+- Append new entries as you work (timestamps are optional but helpful).
+- Do not delete or rewrite earlier content; corrections should be new lines.
+
 Keep it short but concrete:
 - Goal
 - Plan
 - Changes made (files + high-level)
 - Decisions / tradeoffs
 - Any assumptions you made
+- Known open questions / ambiguities (when encountered, even if resolved)
+- Risk of test loophole (if you notice any, e.g., “could be passed by filtering outputs”)
 - Commands run + result (or why you couldn’t run them)
 - Add any and all commit hashes that emerged during the execution of the ticket, as soon as the commit is performed.
-- Do not modify existing file contents, only append to it or annotate it.
-- Do not delete the file.
 
 The goal is not bureaucracy; it’s to make review faster later.
 
 ---
 
 ## Style + correctness notes (numerical code)
-- include numerous breif high level descriptive comments of why code is doing what it is. Do not include them if they are redundant, but attempt to comment at a high enough level that it cannot be redundant, even with self documenting code.
+- Include numerous brief high level descriptive comments of why code is doing what it is. Do not include them if they are redundant, but attempt to comment at a high enough level that it cannot be redundant, even with self documenting code.
 - Prefer explicit axis/shape handling over cleverness.
 - When emitting tables, keep column names stable unless a user asks otherwise.
 - When catching exceptions for “continue but record error,” include useful context in the recorded error string.
-- For test assertions, prefer asserting on the actual written artifacts (data/*.csv, tables/*.csv, logs/warnings.csv) over matching printed output. Matching stdout is allowed only for exit-code / crash-path tests.
+- For test assertions, prefer asserting on actual written artifacts (data/*.csv, tables/*.csv, logs/warnings.csv) over matching printed output.
+  - Matching stdout/stderr is allowed only for:
+    - crash-path / exit-code tests where stderr content is the contract (e.g., strict mode errors),
+    - or when stdout is explicitly part of a stable CLI contract (rare here).
+  - If you need to prove something happened, prefer checking logs/*.json, warnings.csv, or a report artifact.
 - Avoid float nondeterminism in tests: compare exact integers or small arrays, or use tolerances intentionally.
-- When testing weight stats, set sample_per_matrix >= rows*cols so percentiles are computed on the full matrix and are deterministic.
+- When testing weight stats, set `sample_per_matrix >= rows*cols` so percentiles are computed on the full matrix and are deterministic.
