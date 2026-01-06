@@ -86,3 +86,6 @@ Add auditability artifacts so runs can be reconstructed:
 
 ## Commands run (post-fix)
 - `./.venv/bin/python -m unittest tests.test_auditability_artifacts_integration` (PASS)
+
+## commit
+- [main 764c3da] feat(audit): add run_context + write_manifest artifacts
