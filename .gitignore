@@ -38,11 +38,9 @@ htmlcov/
 .ipynb_checkpoints
 *.log
 runs/
+/tmp_model_npz/*
 
 # Environment files
 .env
 .env.*
 .envrc
-
-# Agent progress reports
-/agents/*

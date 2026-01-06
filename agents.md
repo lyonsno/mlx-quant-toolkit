@@ -150,7 +150,7 @@ If the user explicitly says “do it end-to-end in one go,” you can do both ph
 ## Progress notes (lightweight but persistent)
 
 For each ticket/issue, create or update:
-- `agents/<ticket_slug>_progress.md`
+- `docs/agent_progress_reports/<ticket_slug>_progress.md`
 - continually update the file as you work, not only at the end.
 Keep it short but concrete:
 - Goal
@@ -159,6 +159,7 @@ Keep it short but concrete:
 - Decisions / tradeoffs
 - Any assumptions you made
 - Commands run + result (or why you couldn’t run them)
+- Add any and all commit hashes that emerged during the execution of the ticket, as soon as the commit is performed.
 - Do not modify existing file contents, only append to it or annotate it.
 - Do not delete the file.
 
@@ -167,7 +168,7 @@ The goal is not bureaucracy; it’s to make review faster later.
 ---
 
 ## Style + correctness notes (numerical code)
-
+- include numerous breif high level descriptive comments of why code is doing what it is. Do not include them if they are redundant, but attempt to comment at a high enough level that it cannot be redundant, even with self documenting code.
 - Prefer explicit axis/shape handling over cleverness.
 - When emitting tables, keep column names stable unless a user asks otherwise.
 - When catching exceptions for “continue but record error,” include useful context in the recorded error string.
