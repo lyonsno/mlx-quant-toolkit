@@ -99,6 +99,17 @@ Important keys under `scan`:
 - `use_safetensors_index_json`: if true, prefer scanning only the shards referenced by an index file
 - `strict_index`: when index mode is active, fail if the index references missing shards
 
+### Parsing options
+
+Important keys under `parsing`:
+
+- `layer_regex`: regex used to parse the layer id (first capture group).
+- `expert_regex`: regex used to parse the expert id (first capture group).
+- `proj_aliases`: map of canonical proj names to alias strings used for proj inference.
+- `shared_expert_keywords`: keywords that must all appear to mark a tensor as a shared expert.
+- `proj_group_strict`: when a rule uses `proj_group`, require alias resolution via `proj_aliases` (otherwise skip the rule).
+- `strict_packed_split`: if true, packed_split mismatches raise; if false they warn + fall back.
+
 ### Extraction rules and canonical shapes
 
 Each extraction rule declares how to map a matched tensor into a canonical axis order:
@@ -123,8 +134,24 @@ The preferred format is controlled by `output.format`:
 - `parquet` (preferred) writes `*.parquet` when possible
 - `csv` writes `*.csv`
 
+`output.compression` is passed to Parquet writers (ignored for CSV).
+
 When Parquet writing fails, the pipeline falls back to CSV for that artifact and records
 the error in `logs/write_manifest.json`.
+
+### Metadata options
+
+Important keys under `metadata`:
+
+- `enabled`: if true, parse a nearby `config.json` and emit metadata logs.
+- `config_path`: optional override path to `config.json` (relative paths resolve under `model_path`).
+
+### Debug options
+
+Important keys under `debug`:
+
+- `dump_unmatched_tensors`: if true, write `data/unmatched_tensors.*` for expertish tensors that failed extraction.
+- `print_progress_every_files`: progress log cadence (0 to disable).
 
 ## Run outputs
 
@@ -138,7 +165,7 @@ runs/<model-id>/<run-name>/
     tensor_inventory.{parquet|csv}
     matrix_stats.{parquet|csv}
     quant_sim.{parquet|csv}
-    unmatched_tensors.{parquet|csv}          (optional)
+    unmatched_tensors.{parquet|csv}          (optional; requires `debug.dump_unmatched_tensors`)
   tables/
     A_weight_layer_summary.{parquet|csv}
     A_weight_block4_summary.{parquet|csv}
@@ -149,7 +176,7 @@ runs/<model-id>/<run-name>/
     B_quant_deltas.{parquet|csv}             (optional; requires `delta_pairs`)
   logs/
     warnings.{parquet|csv}                   (only if warnings were emitted)
-    index_report.json                        (only if index mode is active)
+    index_report.json                        (only if index mode is active and parses)
     model_config.raw.json                    (metadata enabled + config found)
     model_shape_budget.json                  (metadata enabled + config found)
     run_context.json                         (always)
@@ -157,6 +184,11 @@ runs/<model-id>/<run-name>/
     write_manifest.json                      (always)
   cache/
     sampled_indices/                         (deterministic sampling cache)
+  plots/                                     (created by init_run; reserved for plots)
+    summary/
+    global/
+    block4/
+    layer/
 ```
 
 ### Auditability artifacts (logs)
