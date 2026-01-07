@@ -15,3 +15,10 @@
 - Open questions / ambiguities: none.
 - Risk of test loophole: not applicable (doc-only change).
 - Commands run: none after README edits.
+
+- Changes made: expanded `README.md` metadata section to document `metadata.mode` as a reserved/informational field.
+- Decisions / tradeoffs: kept the description minimal since current code does not consume `metadata.mode`.
+- Assumptions: none.
+- Open questions / ambiguities: none.
+- Risk of test loophole: not applicable (doc-only change).
+- Commands run: `rg -n "metadata" -n scripts/collect_data.py scripts/metadata.py scripts/init_run.py`, `rg -n "metadata" -S README.md docs tests`, `sed -n '130,190p' README.md`

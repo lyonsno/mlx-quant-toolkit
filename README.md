@@ -143,6 +143,7 @@ the error in `logs/write_manifest.json`.
 
 Important keys under `metadata`:
 
+- `mode`: currently informational/reserved (default: `"validate"`); does not change behavior yet.
 - `enabled`: if true, parse a nearby `config.json` and emit metadata logs.
 - `config_path`: optional override path to `config.json` (relative paths resolve under `model_path`).
 
