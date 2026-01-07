@@ -62,11 +62,14 @@ Common setups:
 
 Optional dependencies (runtime behavior):
 
+- Note: `pyproject.toml` currently includes `mlx` and `pyarrow` as dependencies, but the scripts are written to
+  degrade gracefully when they are unavailable at runtime (for example: running from source without installing
+  the full dependency set, or install failures on unsupported platforms).
 - `mlx` is only required for quantization simulation. If `mlx` is not importable,
-  `collect_data.py` will warn and still write `matrix_stats` and an empty `quant_sim`.
-- `pyarrow` is required for Parquet. If Parquet writing fails for any reason (missing
-  dependency, invalid compression, etc.), the pipeline falls back to CSV and records
-  that fallback in `logs/write_manifest.json`.
+  `collect_data.py` will warn and still write `matrix_stats` and `quant_sim` (with zero rows).
+- Parquet writing requires a working Parquet backend (typically `pyarrow`). If Parquet writing fails for any
+  reason (missing backend, invalid compression, etc.), the pipeline falls back to CSV and records that fallback
+  in `logs/write_manifest.json`.
 
 ## What the scripts do
 
@@ -260,12 +263,16 @@ runs/<model-id>/<run-name>/
   - any CLI overrides (e.g. `--model-path`)
   - the final scan plan (`scan_mode`, scanned files count/examples, etc.)
   - index status (`disabled` / `not_found` / `active` / `unavailable` / `error`)
+  - index discovery fields (`searched`, `found`, `active`) and the resolved `index_path` (or null)
 - `logs/write_manifest.json` records:
   - requested output settings (`format`, `compression`)
   - the actual written artifact paths, formats, row counts, and Parquet→CSV fallbacks
 - `logs/run_health.json` records:
   - scan summary (files scanned, tensors observed)
   - extraction summary (rule vs fallback counts, unmatched counts)
+  - output summary (row counts, format, and whether optional artifacts were written)
+  - the effective `config_used` snapshot (including any CLI overrides)
+  - tensor name format info + a small set of example tensor names
   - index summary counts when index mode is active
 
 ### Data artifacts (high-level schema)
@@ -274,11 +281,13 @@ runs/<model-id>/<run-name>/
   - key columns: `file`, `tensor_name`, `dtype`, `shape`, `ndim`, `nbytes`
   - when index mode is active: `in_index`, `index_shard`
 - `data/matrix_stats.*`: one row per extracted expert matrix
-  - key columns: `file`, `source_tensor`, `derived_tensor`, `layer`, `block4`, `proj`, `expert_id`, `rows`, `cols`
+  - key columns: `file`, `source_tensor`, `derived_tensor`, `layer`, `block4`, `proj`, `expert_id`,
+    `is_routed_expert`, `is_shared_expert`, `rows`, `cols`, `dtype`
   - includes numeric metrics like `mean_abs`, `max_abs`, `p99_abs`, and groupwise outlier ratios (e.g. `g32_*`)
   - conventions: unknown `layer` is recorded as `-1`; shared experts use `expert_id = -1`
 - `data/quant_sim.*`: one row per (expert, scheme) simulation result
-  - key columns: `scheme`, `mode`, `bits`, `group_size`, `w_rel_fro`, `w_rel_max`, `scale_*`, `bias_*`, `error`
+  - key columns: `file`, `source_tensor`, `derived_tensor`, `layer`, `block4`, `proj`, `expert_id`,
+    `is_shared_expert`, `scheme`, `mode`, `bits`, `group_size`, `w_rel_fro`, `w_rel_max`, `scale_*`, `bias_*`, `error`
   - if a scheme fails, rows are still emitted with `error` populated (so you can see coverage)
 
 ## Safetensors index support (`model.safetensors.index.json`)
@@ -293,7 +302,8 @@ by that index*. The final decision is recorded in `logs/run_context.json` under 
 
 When index mode is active:
 
-- `logs/index_report.json` lists missing/extra shards and missing/extra tensors.
+- `logs/index_report.json` lists missing/extra shards and missing/extra tensors, and records
+  `extra_safetensors_files_on_disk` plus any `index_metadata` from the index file.
 - `data/tensor_inventory.*` includes `in_index` and `index_shard` columns.
 - `logs/run_context.json` and `logs/run_health.json` include index status and counts.
 
@@ -315,6 +325,7 @@ Run the test suite:
 
 - `make test`
 - `make verbose-test`
+- (if you use `uv`) `uv run make test`
 
 Or directly:
 
