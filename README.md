@@ -139,6 +139,55 @@ If no rule matches, a heuristic fallback tries:
 
 Run-level counts for “rule vs fallback” are recorded in `logs/run_health.json`.
 
+### Canonicalization and packed splits (mental model)
+
+This pipeline has to deal with the fact that different checkpoints store the same logical
+“expert weight matrices” in different shapes, axis orders, and naming conventions.
+`collect_data.py` normalizes that into a small, explicit representation before computing stats.
+
+Canonicalization (in this repo) means:
+
+- **Canonical axis order.** A rule’s `layout` tells us which input axes correspond to `layer`,
+  `expert`, `rows`, and `cols`. We then transpose into `(L,E,R,C)`, `(E,R,C)`, or `(R,C)` so
+  downstream code can treat everything uniformly.
+- **No numeric normalization.** Canonicalization is about axis semantics (transpose/relabel),
+  not changing weight values (no scaling, centering, etc.). Packed splits add slicing, but the
+  slices still contain the original values.
+- **Preserve provenance.** We keep the original tensor name as `source_tensor` and name the
+  analyzed artifact `derived_tensor` (for example: `source_tensor::gate_proj`) so every row in
+  `data/matrix_stats.*` can be traced back to the original file/tensor.
+- **Usually canonical proj names.** When `proj` is inferred from a tensor name or a regex
+  `proj_group`, we resolve aliases via `parsing.proj_aliases` so tables don’t fragment on
+  `w1` vs `gate_proj`.
+
+Packed splits are for “fused” tensors that contain multiple projections concatenated together:
+
+- Some models store multiple projs in one tensor (for example: gate+up+down packed along rows or
+  cols). A rule’s `packed_split` specifies how to slice the *canonicalized* matrix:
+  `{ "axis": "rows"|"cols", "splits": [...], "projs": [...] }`.
+- Each slice becomes its own extracted matrix with its own `proj` and a `derived_tensor` like
+  `source_tensor::split[rows]::gate_proj`.
+
+Why this adds complexity / how to think about it:
+
+- `layout` answers “what do the axes mean?”; `packed_split` answers “how do I break a fused axis
+  into multiple logical matrices?”. The `packed_split.axis` is interpreted *after*
+  canonicalization, so configure `layout` first, then choose whether you’re splitting canonical
+  rows or canonical cols.
+- A wrong split config can either error (best case) or silently mislabel slices (worst case),
+  which will skew per-proj aggregates. Use `parsing.strict_packed_split=true` while developing
+  rules; when set to `false` the run continues but records `packed_split failed ...` warnings in
+  `logs/warnings.*`.
+- `packed_split.projs` are currently treated as literal strings*, so prefer canonical proj names
+  in that list to avoid fragmenting tables by `proj`.
+
+Practical sanity checks when you add/modify rules:
+
+- `data/matrix_stats.*`: confirm fused tensors produce multiple `derived_tensor` rows and that
+  `rows`/`cols` per `proj` match what you expect for that architecture.
+- `logs/warnings.*` (and optionally `data/unmatched_tensors.*`): confirm you’re not “getting
+  results” via a fallback path that hid a rule/packed_split mismatch.
+
 ### Output format and fallback
 
 The preferred format is controlled by `output.format`:
