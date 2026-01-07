@@ -5,6 +5,18 @@ from `.safetensors` and `.npz`, computing per-expert stats, and optionally simul
 MLX quantization/dequantization error. The outputs are designed to be inspectable and
 auditable: each run writes durable JSON “context” and “what was actually written” artifacts.
 
+## Pending decisions (read this first)
+
+Some behaviors are still pending a policy decision, but the pipeline already works end-to-end.
+Where this matters in the README, we mark those statements with `*` so you can avoid treating
+them as final contracts. This section summarizes the open decisions so readers get context
+up front, and the `*` markers below point to the exact spots they affect.
+
+Pending decisions (*):
+- How `scan.strict_index` should behave when the index is missing or invalid.
+- Whether `packed_split.projs` values must be canonicalized via `proj_aliases`, and how strict to be.
+- How to define the contract for single-file `model_path` when an index exists in the parent dir.
+
 ## Quickstart
 
 1) Initialize a run directory and edit the config template:
@@ -97,7 +109,7 @@ Important keys under `scan`:
 - `include_shared_expert`: include shared expert tensors when present
 - `inventory_all_tensors`: if true, inventory every tensor (even non-float weights)
 - `use_safetensors_index_json`: if true, prefer scanning only the shards referenced by an index file
-- `strict_index`: when index mode is active, fail if the index references missing shards
+- `strict_index`*: when index mode is active, fail if the index references missing shards
 
 ### Parsing options
 
@@ -118,7 +130,7 @@ Each extraction rule declares how to map a matched tensor into a canonical axis 
 - `ndim`: expected input ndim
 - `layout`: `{layer_axis, expert_axis, rows_axis, cols_axis}` to transpose into `(L,E,R,C)` / `(E,R,C)` / `(R,C)`
 - Optional `proj_group` / `expert_group`: regex capture group indices used to extract proj/expert id
-- Optional `packed_split`: split a fused matrix along rows/cols into multiple projections
+- Optional `packed_split`*: split a fused matrix along rows/cols into multiple projections
 
 If no rule matches, a heuristic fallback tries:
 
@@ -228,7 +240,7 @@ If `scan.use_safetensors_index_json=true` and an index file exists (either
 
 Note: if `model_path` points to a single shard file, index discovery is performed in the
 parent directory. If an index is found, scanning may expand to additional shards referenced
-by that index. The final decision is recorded in `logs/run_context.json` under `scan_plan`.
+by that index*. The final decision is recorded in `logs/run_context.json` under `scan_plan`.
 
 When index mode is active:
 
@@ -237,6 +249,8 @@ When index mode is active:
 - `logs/run_context.json` and `logs/run_health.json` include index status and counts.
 
 If `scan.strict_index=true`, missing indexed shards will cause a non-zero exit.
+
+Pending decisions (*): strict_index behavior when the index is missing/invalid; packed_split proj canonicalization policy; file `model_path` + index expansion behavior.
 
 ## Troubleshooting
 

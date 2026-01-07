@@ -22,3 +22,17 @@
 - Open questions / ambiguities: none.
 - Risk of test loophole: not applicable (doc-only change).
 - Commands run: `rg -n "metadata" -n scripts/collect_data.py scripts/metadata.py scripts/init_run.py`, `rg -n "metadata" -S README.md docs tests`, `sed -n '130,190p' README.md`
+
+- Changes made: annotated README statements that depend on unresolved decisions with asterisks and added a brief "Pending decisions (*)" note.
+- Decisions / tradeoffs: used a single footnote-style line to avoid cluttering the main sections.
+- Assumptions: none.
+- Open questions / ambiguities: none.
+- Risk of test loophole: not applicable (doc-only change).
+- Commands run: `cat future_work/current_work.md`
+
+- Changes made: added an introductory "Pending decisions" section to `README.md` that complements the existing `*` markers.
+- Decisions / tradeoffs: kept the section short and scoped to the three open policy questions to avoid duplicating detailed docs below.
+- Assumptions: none.
+- Open questions / ambiguities: none.
+- Risk of test loophole: not applicable (doc-only change).
+- Commands run: none after pending-decisions section edit.
