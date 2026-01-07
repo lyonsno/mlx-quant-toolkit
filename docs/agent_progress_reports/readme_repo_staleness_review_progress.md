@@ -16,3 +16,5 @@
 
 - Changes made: updated `README.md` to (a) clarify runtime-tolerant deps vs `pyproject.toml` packaging, (b) document additional `index_report.json` fields, (c) expand `run_context.json` and `run_health.json` descriptions, (d) expand `matrix_stats`/`quant_sim` schema bullets, and (e) add an optional `uv` test invocation line. (Per user request, did not modify `## Pending decisions`.)
 - Commands run: none (edits via apply_patch only).
+
+- Commit: `4dfa53c83142237186a1e34a1bca10ead9c14cf5` — README documents runtime-tolerant deps and audit artifacts
