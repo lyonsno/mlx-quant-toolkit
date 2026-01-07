@@ -35,3 +35,4 @@ Clarify the repo-level progress-log policy so unrelated work doesn’t get appen
 
 ## commit
 [main 857740a] docs(readme): explain canonicalization and packed splits
+[main 39ebc8b] docs(agents): clarify progress log creation policy
