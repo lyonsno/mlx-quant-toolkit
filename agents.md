@@ -191,12 +191,22 @@ If you touch this behavior, you must update/extend tests.
 
 ## Progress notes (lightweight but persistent)
 
-For each ticket/issue, create (if necessary), and then update as you work:
+For each new ticket/issue, create a new progress report by default, then update it as you work:
 - `docs/agent_progress_reports/<ticket_slug>_progress.md`
+
+Continuation rule (to avoid mixing unrelated tickets):
+- Continue an existing progress report **only** when:
+  - the user explicitly references a specific prior progress report file to continue, **or**
+  - the agent already created a progress report earlier in the current session/thread for this ticket.
+- Do **not** pick a progress report solely because it’s currently open in the IDE/editor.
+- If the ticket slug isn’t provided, pick a short descriptive slug and state the chosen progress report path early
+  so the user can explicitly reference it for continuation later.
 
 Append-only rules:
 - Append new entries as you work (timestamps are optional but helpful).
 - Do not delete or rewrite earlier content; corrections should be new lines.
+- Exception: if the user explicitly requests a migration/cleanup (e.g., move a mis-filed entry), follow their
+  instructions and record the move in the relevant progress report(s).
 
 Keep it short but concrete:
 - Goal

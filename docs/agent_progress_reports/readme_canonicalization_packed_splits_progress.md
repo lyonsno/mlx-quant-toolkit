@@ -15,3 +15,23 @@ what “packed splits” are, why they add complexity, and how to reason about/v
 
 ## Notes
 - During the README edit, I only used read-only inspection commands (e.g. `rg`, `sed`) and did not run tests.
+
+---
+
+## Follow-up — progress log policy clarification
+
+## Goal
+Clarify the repo-level progress-log policy so unrelated work doesn’t get appended to an arbitrary open file.
+
+## Changes made
+- Updated `agents.md`
+  - Default behavior: create a new `docs/agent_progress_reports/<ticket_slug>_progress.md` per new ticket/issue.
+  - Continuation allowed only when a specific prior log is referenced, or when the agent already created a log
+    earlier in the current session/thread.
+  - Added an explicit exception for user-requested migrations/cleanup (e.g., moving a mis-filed entry).
+
+## Commands run
+- None (docs/policy-only changes).
+
+## commit
+[main 857740a] docs(readme): explain canonicalization and packed splits
