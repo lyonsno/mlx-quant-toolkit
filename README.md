@@ -321,18 +321,30 @@ Pending decisions (*): strict_index behavior when the index is missing/invalid; 
 
 ## Tests
 
-Run the test suite:
+Run unit tests:
+- `uv run make test`
+- `make test` (Makefile uses `./.venv/bin/python`)
+- fallback: `python -m unittest discover -s tests`
 
-- `make test`
+run in verbose mode:
 - `make verbose-test`
-- (if you use `uv`) `uv run make test`
+- fallback: `python -m unittest discover -s tests -v`
 
-Or directly:
+Run one test module:
+- `uv run python -m unittest tests.test_optional_mlx`
+- `uv run python -m unittest tests.test_split_along_axis`
 
-- `./.venv/bin/python -m unittest discover -s tests`
+Tiny-fixture pipeline:
+- `python scripts/init_run.py --root ./runs --model-id <model> --run-name <run> --model-path /path/to/model`
+- `python scripts/collect_data.py --run-dir ./runs/<model>/<run>`
+- `python scripts/build_tables.py --run-dir ./runs/<model>/<run>`
+
+Subprocess-based acceptance tests must use:
+- `sys.executable`, `cwd=repo_root`, `capture_output=True`, and `PYTHONWARNINGS=default`
+
 
 ## Config / metadata examples
 
 `example_safetensors_folder_metadata_convention_variance/.../` contains example
 `config.json` and `model.safetensors.index.json` files from various checkpoints and
-folder conventions. These are used as test assets and as planning/reference material.
+folder conventions. These are used as test assets and as planning/reference material. One primary purpose is to demonstrate the LACK OF ANY STABLE SCHEMA and give *sample* of the potential variance.
