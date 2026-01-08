@@ -345,6 +345,10 @@ Subprocess-based acceptance tests must use:
 
 ## Config / metadata examples
 
-`example_safetensors_folder_metadata_convention_variance/.../` contains example
-`config.json` and `model.safetensors.index.json` files from various checkpoints and
-folder conventions. These are used as test assets and as planning/reference material. One primary purpose is to demonstrate the LACK OF ANY STABLE SCHEMA and give *sample* of the potential variance.
+`example_safetensors_folder_metadata_convention_variance/` contains a small corpus of example
+`config.json` and `model.safetensors.index.json` files collected from various checkpoints and
+folder conventions.
+
+These examples are intentionally non-canonical and non-exhaustive. They are not meant to be treated
+as fixtures or as a schema, and they are not intended to ship as part of the final package. Each
+example folder has a small `manifest.json` describing what is present and what quirks it demonstrates.
