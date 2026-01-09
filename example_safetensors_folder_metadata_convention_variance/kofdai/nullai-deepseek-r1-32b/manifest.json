@@ -1,0 +1,46 @@
+{
+  "kind": "example_model_metadata_convention",
+  "id": "kofdai/nullai-deepseek-r1-32b",
+  "generated_at_utc": "2026-01-08T17:04:59Z",
+  "purpose": "Describe the on-disk metadata artifacts and noteworthy convention quirks for this example.",
+  "files": [
+    {
+      "name": "config.json",
+      "relative_path": "kofdai/nullai-deepseek-r1-32b/config.json",
+      "size_bytes": 920,
+      "sha256": "f90f1c2e03679d80d5b3393dc71a7be9fb540535957541dd4563b2dc228458f1"
+    }
+  ],
+  "config_json": {
+    "present": true,
+    "relative_path": "kofdai/nullai-deepseek-r1-32b/config.json",
+    "size_bytes": 920,
+    "parse_error": null,
+    "summary": {
+      "model_type": "qwen2",
+      "architectures": [
+        "Qwen2ForCausalLM"
+      ],
+      "num_hidden_layers": 64,
+      "hidden_size": 5120,
+      "quantization": {
+        "group_size": 64,
+        "bits": 4,
+        "mode": "affine"
+      },
+      "_key_count": 25,
+      "_quirks": [
+        "has_quantization_block"
+      ]
+    }
+  },
+  "safetensors_index_json": {
+    "present": false,
+    "relative_path": null,
+    "size_bytes": null,
+    "parse_error": null,
+    "summary": {}
+  },
+  "tags": [],
+  "notes": []
+}

@@ -1,0 +1,67 @@
+{
+  "kind": "example_model_metadata_convention",
+  "id": "Qwen/Qwen3-Next-80B-A3B-Thinking",
+  "generated_at_utc": "2026-01-08T17:04:59Z",
+  "purpose": "Describe the on-disk metadata artifacts and noteworthy convention quirks for this example.",
+  "files": [
+    {
+      "name": "config.json",
+      "relative_path": "Qwen/Qwen3-Next-80B-A3B-Thinking/config.json",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "model.safetensors.index.json",
+      "relative_path": "Qwen/Qwen3-Next-80B-A3B-Thinking/model.safetensors.index.json",
+      "size_bytes": 7200097,
+      "sha256": "0e5274f538d750abdd7fd55a36bad64100f9e881d59c65f6a59f364d2f8b6dd7"
+    }
+  ],
+  "config_json": {
+    "present": true,
+    "relative_path": "Qwen/Qwen3-Next-80B-A3B-Thinking/config.json",
+    "size_bytes": 0,
+    "parse_error": "empty",
+    "summary": {
+      "_note": "not parsed"
+    }
+  },
+  "safetensors_index_json": {
+    "present": true,
+    "relative_path": "Qwen/Qwen3-Next-80B-A3B-Thinking/model.safetensors.index.json",
+    "size_bytes": 7200097,
+    "parse_error": null,
+    "summary": {
+      "metadata_keys": [
+        "total_size"
+      ],
+      "metadata_preview": {
+        "total_size": 162649725440
+      },
+      "weight_map_entries": 75944,
+      "weight_map_key_examples": [
+        "lm_head.weight",
+        "model.embed_tokens.weight",
+        "model.layers.0.input_layernorm.weight",
+        "model.layers.0.linear_attn.A_log",
+        "model.layers.0.linear_attn.conv1d.weight"
+      ],
+      "shard_count": 41,
+      "shard_examples": [
+        "model-00001-of-00041.safetensors",
+        "model-00002-of-00041.safetensors",
+        "model-00003-of-00041.safetensors",
+        "model-00004-of-00041.safetensors",
+        "model-00005-of-00041.safetensors"
+      ]
+    }
+  },
+  "tags": [
+    "empty_config_json",
+    "large_index",
+    "config_parse_error"
+  ],
+  "notes": [
+    "config.json is a 0-byte file (common real-world failure mode)"
+  ]
+}

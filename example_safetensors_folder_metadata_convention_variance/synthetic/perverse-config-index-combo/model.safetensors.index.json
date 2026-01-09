@@ -1,0 +1,32 @@
+{
+  "metadata": {
+    "total_size": "1234567890",
+    "format": "pt",
+    "source": "synthetic",
+    "notes": [
+      "Intentionally perverse example for local dev.",
+      "Shard names mix separators, relative prefixes, and subdirectories.",
+      "Tensor names mix multiple naming conventions (model.*, transformer.*, layers.*)."
+    ]
+  },
+  "weight_map": {
+    "model.embed_tokens.weight": "./shards/model-00001-of-00002.safetensors",
+    "model.layers.00.mlp.experts.0001.w1.weight": "shards\\model-00001-of-00002.safetensors",
+    "model.layers.00.mlp.experts.0001.w2.weight": "shards/model-00001-of-00002.safetensors",
+    "model.layers.00.mlp.experts.0001.w3.weight": "model-00001-of-00002.safetensors",
+
+    "model.layers.0.mlp.shared_expert.w13.weight": "../model-00002-of-00002.safetensors",
+    "model.layers.0.mlp.shared_expert_gate.weight": "../model-00002-of-00002.safetensors",
+
+    "transformer.h.0.moe.experts.0.down_proj.weight": "weights/00002.safetensors",
+    "transformer.h.0.moe.experts.0.gate_proj.weight": "weights/00002.safetensors",
+    "transformer.h.0.moe.experts.0.up_proj.weight": "weights/00002.safetensors",
+
+    "layers.0.experts.0.down_proj.weight": "MODEL-00001-OF-00002.SAFETENSORS",
+    "layers.0.experts.0.gate_proj.weight": "MODEL-00001-OF-00002.SAFETENSORS",
+    "layers.0.experts.0.up_proj.weight": "MODEL-00001-OF-00002.SAFETENSORS",
+
+    "odd.tensor.name.with..double_dots..and___underscores": "model-00002-of-00002.safetensors",
+    "tensor name with spaces": "model-00002-of-00002.safetensors"
+  }
+}

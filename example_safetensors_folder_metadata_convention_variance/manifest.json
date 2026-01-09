@@ -1,0 +1,1171 @@
+{
+  "kind": "example_safetensors_folder_metadata_convention_variance",
+  "generated_at_utc": "2026-01-08T17:04:59Z",
+  "generator": {
+    "python": "3.11.2",
+    "note": "Generated locally to annotate the corpus; descriptive, not a schema."
+  },
+  "purpose": [
+    "Static, non-canonical examples of model folder metadata conventions (config.json + model.safetensors.index.json).",
+    "Not exhaustive; intended to demonstrate variance and failure modes without implying a schema."
+  ],
+  "collection": {
+    "root_dir": "example_safetensors_folder_metadata_convention_variance",
+    "model_count": 7,
+    "vendors": [
+      "Qwen",
+      "kikekewl",
+      "kofdai",
+      "lmstudio-community",
+      "synthetic"
+    ],
+    "tags_present": [
+      "config_parse_error",
+      "empty_config_json",
+      "eos_token_id_list",
+      "has_readme",
+      "large_index"
+    ],
+    "total_files": 14,
+    "models": [
+      {
+        "id": "Qwen/Qwen3-Next-80B-A3B-Thinking",
+        "vendor": "Qwen",
+        "model": "Qwen3-Next-80B-A3B-Thinking",
+        "relative_dir": "Qwen/Qwen3-Next-80B-A3B-Thinking",
+        "files": [
+          {
+            "name": "config.json",
+            "relative_path": "Qwen/Qwen3-Next-80B-A3B-Thinking/config.json",
+            "size_bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "name": "model.safetensors.index.json",
+            "relative_path": "Qwen/Qwen3-Next-80B-A3B-Thinking/model.safetensors.index.json",
+            "size_bytes": 7200097,
+            "sha256": "0e5274f538d750abdd7fd55a36bad64100f9e881d59c65f6a59f364d2f8b6dd7"
+          }
+        ],
+        "config_json": {
+          "present": true,
+          "relative_path": "Qwen/Qwen3-Next-80B-A3B-Thinking/config.json",
+          "size_bytes": 0,
+          "parse_error": "empty",
+          "summary": {
+            "_note": "not parsed"
+          }
+        },
+        "safetensors_index_json": {
+          "present": true,
+          "relative_path": "Qwen/Qwen3-Next-80B-A3B-Thinking/model.safetensors.index.json",
+          "size_bytes": 7200097,
+          "parse_error": null,
+          "summary": {
+            "metadata_keys": [
+              "total_size"
+            ],
+            "metadata_preview": {
+              "total_size": 162649725440
+            },
+            "weight_map_entries": 75944,
+            "weight_map_key_examples": [
+              "lm_head.weight",
+              "model.embed_tokens.weight",
+              "model.layers.0.input_layernorm.weight",
+              "model.layers.0.linear_attn.A_log",
+              "model.layers.0.linear_attn.conv1d.weight"
+            ],
+            "shard_count": 41,
+            "shard_examples": [
+              "model-00001-of-00041.safetensors",
+              "model-00002-of-00041.safetensors",
+              "model-00003-of-00041.safetensors",
+              "model-00004-of-00041.safetensors",
+              "model-00005-of-00041.safetensors"
+            ]
+          }
+        },
+        "notes": [
+          "config.json is a 0-byte file (common real-world failure mode)"
+        ],
+        "tags": [
+          "empty_config_json",
+          "large_index",
+          "config_parse_error"
+        ]
+      },
+      {
+        "id": "kikekewl/qwen3-next-80b-a3b-thinking",
+        "vendor": "kikekewl",
+        "model": "qwen3-next-80b-a3b-thinking",
+        "relative_dir": "kikekewl/qwen3-next-80b-a3b-thinking",
+        "files": [
+          {
+            "name": "config.json",
+            "relative_path": "kikekewl/qwen3-next-80b-a3b-thinking/config.json",
+            "size_bytes": 1237,
+            "sha256": "9f276e678aec5203662ba6c561118e44567538e3d0717930797fff0031186ef2"
+          },
+          {
+            "name": "model.safetensors.index.json",
+            "relative_path": "kikekewl/qwen3-next-80b-a3b-thinking/model.safetensors.index.json",
+            "size_bytes": 73253,
+            "sha256": "0cab9820efa3da737ea4ce82299d34c56327f465710224d4a3e0e99ef17f4836"
+          }
+        ],
+        "config_json": {
+          "present": true,
+          "relative_path": "kikekewl/qwen3-next-80b-a3b-thinking/config.json",
+          "size_bytes": 1237,
+          "parse_error": null,
+          "summary": {
+            "model_type": "qwen3_next",
+            "architectures": [
+              "Qwen3NextForCausalLM"
+            ],
+            "num_hidden_layers": 48,
+            "hidden_size": 2048,
+            "num_experts": 512,
+            "num_experts_per_tok": 10,
+            "moe_intermediate_size": 512,
+            "shared_expert_intermediate_size": 512,
+            "decoder_sparse_step": 1,
+            "full_attention_interval": 4,
+            "mlp_only_layers": [],
+            "_key_count": 39,
+            "_quirks": []
+          }
+        },
+        "safetensors_index_json": {
+          "present": true,
+          "relative_path": "kikekewl/qwen3-next-80b-a3b-thinking/model.safetensors.index.json",
+          "size_bytes": 73253,
+          "parse_error": null,
+          "summary": {
+            "metadata_keys": [
+              "total_parameters",
+              "total_size"
+            ],
+            "metadata_preview": {
+              "total_parameters": 79674388992,
+              "total_size": 159348782592
+            },
+            "weight_map_entries": 807,
+            "weight_map_key_examples": [
+              "lm_head.weight",
+              "model.embed_tokens.weight",
+              "model.layers.0.input_layernorm.weight",
+              "model.layers.0.linear_attn.A_log",
+              "model.layers.0.linear_attn.conv1d.weight"
+            ],
+            "shard_count": 36,
+            "shard_examples": [
+              "model-00001-of-00036.safetensors",
+              "model-00002-of-00036.safetensors",
+              "model-00003-of-00036.safetensors",
+              "model-00004-of-00036.safetensors",
+              "model-00005-of-00036.safetensors"
+            ]
+          }
+        },
+        "notes": [],
+        "tags": []
+      },
+      {
+        "id": "kofdai/nullai-deepseek-r1-32b",
+        "vendor": "kofdai",
+        "model": "nullai-deepseek-r1-32b",
+        "relative_dir": "kofdai/nullai-deepseek-r1-32b",
+        "files": [
+          {
+            "name": "config.json",
+            "relative_path": "kofdai/nullai-deepseek-r1-32b/config.json",
+            "size_bytes": 920,
+            "sha256": "f90f1c2e03679d80d5b3393dc71a7be9fb540535957541dd4563b2dc228458f1"
+          }
+        ],
+        "config_json": {
+          "present": true,
+          "relative_path": "kofdai/nullai-deepseek-r1-32b/config.json",
+          "size_bytes": 920,
+          "parse_error": null,
+          "summary": {
+            "model_type": "qwen2",
+            "architectures": [
+              "Qwen2ForCausalLM"
+            ],
+            "num_hidden_layers": 64,
+            "hidden_size": 5120,
+            "quantization": {
+              "group_size": 64,
+              "bits": 4,
+              "mode": "affine"
+            },
+            "_key_count": 25,
+            "_quirks": [
+              "has_quantization_block"
+            ]
+          }
+        },
+        "safetensors_index_json": {
+          "present": false,
+          "relative_path": null,
+          "size_bytes": null,
+          "parse_error": null,
+          "summary": {}
+        },
+        "notes": [],
+        "tags": []
+      },
+      {
+        "id": "lmstudio-community/GLM-4.5-Air-mxfp4",
+        "vendor": "lmstudio-community",
+        "model": "GLM-4.5-Air-mxfp4",
+        "relative_dir": "lmstudio-community/GLM-4.5-Air-mxfp4",
+        "files": [
+          {
+            "name": "config.json",
+            "relative_path": "lmstudio-community/GLM-4.5-Air-mxfp4/config.json",
+            "size_bytes": 1251,
+            "sha256": "36f86c7cc0fe6cc4febe3d4917daca507ad67eac5d36239e84b60a65ae36f7f6"
+          },
+          {
+            "name": "model.safetensors.index.json",
+            "relative_path": "lmstudio-community/GLM-4.5-Air-mxfp4/model.safetensors.index.json",
+            "size_bytes": 112669,
+            "sha256": "36099337ef7be88074614121596109837da921cf4923821cf451f0c3c49da6b8"
+          }
+        ],
+        "config_json": {
+          "present": true,
+          "relative_path": "lmstudio-community/GLM-4.5-Air-mxfp4/config.json",
+          "size_bytes": 1251,
+          "parse_error": null,
+          "summary": {
+            "model_type": "glm4_moe",
+            "architectures": [
+              "Glm4MoeForCausalLM"
+            ],
+            "num_hidden_layers": 46,
+            "hidden_size": 4096,
+            "n_routed_experts": 128,
+            "num_experts_per_tok": 8,
+            "moe_intermediate_size": 1408,
+            "n_shared_experts": 1,
+            "first_k_dense_replace": 1,
+            "quantization": {
+              "group_size": 64,
+              "bits": 4
+            },
+            "_key_count": 37,
+            "_quirks": [
+              "eos_token_id_is_list",
+              "has_quantization_block"
+            ]
+          }
+        },
+        "safetensors_index_json": {
+          "present": true,
+          "relative_path": "lmstudio-community/GLM-4.5-Air-mxfp4/model.safetensors.index.json",
+          "size_bytes": 112669,
+          "parse_error": null,
+          "summary": {
+            "metadata_keys": [
+              "total_parameters",
+              "total_size"
+            ],
+            "metadata_preview": {
+              "total_parameters": 106852251264,
+              "total_size": 56801458688
+            },
+            "weight_map_entries": 1239,
+            "weight_map_key_examples": [
+              "lm_head.scales",
+              "lm_head.weight",
+              "model.embed_tokens.scales",
+              "model.embed_tokens.weight",
+              "model.layers.0.input_layernorm.weight"
+            ],
+            "shard_count": 11,
+            "shard_examples": [
+              "model-00001-of-00011.safetensors",
+              "model-00002-of-00011.safetensors",
+              "model-00003-of-00011.safetensors",
+              "model-00004-of-00011.safetensors",
+              "model-00005-of-00011.safetensors"
+            ]
+          }
+        },
+        "notes": [],
+        "tags": [
+          "eos_token_id_list"
+        ]
+      },
+      {
+        "id": "lmstudio-community/Qwen3-30B-A3B-Thinking-2507-MLX-8bit",
+        "vendor": "lmstudio-community",
+        "model": "Qwen3-30B-A3B-Thinking-2507-MLX-8bit",
+        "relative_dir": "lmstudio-community/Qwen3-30B-A3B-Thinking-2507-MLX-8bit",
+        "files": [
+          {
+            "name": "config.json",
+            "relative_path": "lmstudio-community/Qwen3-30B-A3B-Thinking-2507-MLX-8bit/config.json",
+            "size_bytes": 1190,
+            "sha256": "f4c33969e88a34a35781fddf92c331348f16dbb5b82c60b718cf17eeec57a6a2"
+          },
+          {
+            "name": "model.safetensors.index.json",
+            "relative_path": "lmstudio-community/Qwen3-30B-A3B-Thinking-2507-MLX-8bit/model.safetensors.index.json",
+            "size_bytes": 119598,
+            "sha256": "b3025770273810c4d546267a4ba253d61a05bea76e74f7298f9451467656062d"
+          }
+        ],
+        "config_json": {
+          "present": true,
+          "relative_path": "lmstudio-community/Qwen3-30B-A3B-Thinking-2507-MLX-8bit/config.json",
+          "size_bytes": 1190,
+          "parse_error": null,
+          "summary": {
+            "model_type": "qwen3_moe",
+            "architectures": [
+              "Qwen3MoeForCausalLM"
+            ],
+            "num_hidden_layers": 48,
+            "hidden_size": 2048,
+            "num_experts": 128,
+            "num_experts_per_tok": 8,
+            "moe_intermediate_size": 768,
+            "decoder_sparse_step": 1,
+            "mlp_only_layers": [],
+            "quantization": {
+              "group_size": 64,
+              "bits": 8
+            },
+            "_key_count": 36,
+            "_quirks": [
+              "has_quantization_block"
+            ]
+          }
+        },
+        "safetensors_index_json": {
+          "present": true,
+          "relative_path": "lmstudio-community/Qwen3-30B-A3B-Thinking-2507-MLX-8bit/model.safetensors.index.json",
+          "size_bytes": 119598,
+          "parse_error": null,
+          "summary": {
+            "metadata_keys": [
+              "total_parameters",
+              "total_size"
+            ],
+            "metadata_preview": {
+              "total_parameters": 30532122624,
+              "total_size": 32440578048
+            },
+            "weight_map_entries": 1351,
+            "weight_map_key_examples": [
+              "lm_head.biases",
+              "lm_head.scales",
+              "lm_head.weight",
+              "model.embed_tokens.biases",
+              "model.embed_tokens.scales"
+            ],
+            "shard_count": 7,
+            "shard_examples": [
+              "model-00001-of-00007.safetensors",
+              "model-00002-of-00007.safetensors",
+              "model-00003-of-00007.safetensors",
+              "model-00004-of-00007.safetensors",
+              "model-00005-of-00007.safetensors"
+            ]
+          }
+        },
+        "notes": [],
+        "tags": []
+      },
+      {
+        "id": "lmstudio-community/gpt-oss-20b-MXFP4-Q8",
+        "vendor": "lmstudio-community",
+        "model": "gpt-oss-20b-MXFP4-Q8",
+        "relative_dir": "lmstudio-community/gpt-oss-20b-MXFP4-Q8",
+        "files": [
+          {
+            "name": "config.json",
+            "relative_path": "lmstudio-community/gpt-oss-20b-MXFP4-Q8/config.json",
+            "size_bytes": 33998,
+            "sha256": "d1c1f73bf62116ed0bb37c068af80534543cd1de9b61d609fc01bf70920e842d"
+          },
+          {
+            "name": "model.safetensors.index.json",
+            "relative_path": "lmstudio-community/gpt-oss-20b-MXFP4-Q8/model.safetensors.index.json",
+            "size_bytes": 67046,
+            "sha256": "6fa724aa7a9130561f9b97debcc06c56ba150d8fbd58fc1168f53a22d6a5490a"
+          }
+        ],
+        "config_json": {
+          "present": true,
+          "relative_path": "lmstudio-community/gpt-oss-20b-MXFP4-Q8/config.json",
+          "size_bytes": 33998,
+          "parse_error": null,
+          "summary": {
+            "model_type": "gpt_oss",
+            "architectures": [
+              "GptOssForCausalLM"
+            ],
+            "num_hidden_layers": 24,
+            "hidden_size": 2880,
+            "num_local_experts": 32,
+            "num_experts_per_tok": 4,
+            "experts_per_token": 4,
+            "quantization": {
+              "group_size": 32,
+              "bits": 4,
+              "mode": "mxfp4",
+              "model.embed_tokens": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.0.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.0.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.0.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.0.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.0.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.1.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.1.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.1.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.1.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.1.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.2.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.2.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.2.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.2.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.2.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.3.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.3.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.3.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.3.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.3.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.4.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.4.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.4.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.4.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.4.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.5.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.5.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.5.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.5.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.5.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.6.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.6.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.6.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.6.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.6.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.7.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.7.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.7.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.7.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.7.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.8.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.8.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.8.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.8.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.8.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.9.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.9.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.9.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.9.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.9.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.10.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.10.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.10.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.10.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.10.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.11.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.11.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.11.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.11.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.11.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.12.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.12.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.12.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.12.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.12.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.13.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.13.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.13.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.13.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.13.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.14.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.14.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.14.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.14.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.14.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.15.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.15.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.15.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.15.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.15.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.16.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.16.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.16.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.16.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.16.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.17.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.17.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.17.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.17.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.17.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.18.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.18.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.18.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.18.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.18.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.19.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.19.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.19.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.19.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.19.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.20.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.20.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.20.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.20.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.20.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.21.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.21.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.21.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.21.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.21.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.22.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.22.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.22.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.22.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.22.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "model.layers.23.self_attn.q_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.23.self_attn.k_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.23.self_attn.v_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.23.self_attn.o_proj": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              },
+              "model.layers.23.mlp.router": {
+                "group_size": 64,
+                "bits": 8
+              },
+              "lm_head": {
+                "group_size": 64,
+                "bits": 8,
+                "mode": "affine"
+              }
+            },
+            "_key_count": 33,
+            "_quirks": [
+              "has_quantization_block",
+              "has_layer_types"
+            ]
+          }
+        },
+        "safetensors_index_json": {
+          "present": true,
+          "relative_path": "lmstudio-community/gpt-oss-20b-MXFP4-Q8/model.safetensors.index.json",
+          "size_bytes": 67046,
+          "parse_error": null,
+          "summary": {
+            "metadata_keys": [
+              "total_parameters",
+              "total_size"
+            ],
+            "metadata_preview": {
+              "total_parameters": 20914755648,
+              "total_size": 12076119168
+            },
+            "weight_map_entries": 775,
+            "weight_map_key_examples": [
+              "lm_head.biases",
+              "lm_head.scales",
+              "lm_head.weight",
+              "model.embed_tokens.biases",
+              "model.embed_tokens.scales"
+            ],
+            "shard_count": 3,
+            "shard_examples": [
+              "model-00001-of-00003.safetensors",
+              "model-00002-of-00003.safetensors",
+              "model-00003-of-00003.safetensors"
+            ]
+          }
+        },
+        "notes": [],
+        "tags": []
+      },
+      {
+        "id": "synthetic/perverse-config-index-combo",
+        "vendor": "synthetic",
+        "model": "perverse-config-index-combo",
+        "relative_dir": "synthetic/perverse-config-index-combo",
+        "files": [
+          {
+            "name": "README.md",
+            "relative_path": "synthetic/perverse-config-index-combo/README.md",
+            "size_bytes": 642,
+            "sha256": "a2e3f252a0654edfc691d1f7157092199e37a91631b5de30bddaeea49939d56f"
+          },
+          {
+            "name": "config.json",
+            "relative_path": "synthetic/perverse-config-index-combo/config.json",
+            "size_bytes": 1342,
+            "sha256": "5f0779dd3f676416253fc26f33adc65ed2cd3b585392e18252a136de0996396a"
+          },
+          {
+            "name": "model.safetensors.index.json",
+            "relative_path": "synthetic/perverse-config-index-combo/model.safetensors.index.json",
+            "size_bytes": 1547,
+            "sha256": "d3a6129c11801c1a684e48f9a14c16e22e3555c9ea2e24a20fc0c59bb65b038a"
+          }
+        ],
+        "config_json": {
+          "present": true,
+          "relative_path": "synthetic/perverse-config-index-combo/config.json",
+          "size_bytes": 1342,
+          "parse_error": null,
+          "summary": {
+            "model_type": "moe_chaos",
+            "architectures": [
+              "DefinitelyNotARealModelForCausalLM"
+            ],
+            "num_hidden_layers": 60,
+            "n_layer": "64",
+            "num_layers": 62,
+            "hidden_size": 4096,
+            "d_model": "4096",
+            "num_experts": 8,
+            "n_routed_experts": "16",
+            "num_local_experts": 12,
+            "num_experts_per_tok": 2,
+            "experts_per_token": "4",
+            "moe_intermediate_size": 14336,
+            "expert_intermediate_size": "14336",
+            "shared_expert_intermediate_size": "7168",
+            "n_shared_experts": 1,
+            "decoder_sparse_step": "1",
+            "full_attention_interval": 4.0,
+            "first_k_dense_replace": "1",
+            "mlp_only_layers": [
+              0,
+              "1",
+              2,
+              "003"
+            ],
+            "quantization": {
+              "bits": 4,
+              "group_size": 64,
+              "backend": "mlx",
+              "dtype": "mxfp4",
+              "note": "This block is not standardized; it is here to demonstrate that some configs stash quantization metadata in arbitrary shapes."
+            },
+            "_key_count": 24,
+            "_quirks": [
+              "eos_token_id_is_list",
+              "has_quantization_block"
+            ]
+          }
+        },
+        "safetensors_index_json": {
+          "present": true,
+          "relative_path": "synthetic/perverse-config-index-combo/model.safetensors.index.json",
+          "size_bytes": 1547,
+          "parse_error": null,
+          "summary": {
+            "metadata_keys": [
+              "format",
+              "notes",
+              "source",
+              "total_size"
+            ],
+            "metadata_preview": {
+              "format": "pt",
+              "notes": [
+                "Intentionally perverse example for local dev.",
+                "Shard names mix separators, relative prefixes, and subdirectories.",
+                "Tensor names mix multiple naming conventions (model.*, transformer.*, layers.*)."
+              ],
+              "source": "synthetic",
+              "total_size": "1234567890"
+            },
+            "weight_map_entries": 14,
+            "weight_map_key_examples": [
+              "layers.0.experts.0.down_proj.weight",
+              "layers.0.experts.0.gate_proj.weight",
+              "layers.0.experts.0.up_proj.weight",
+              "model.embed_tokens.weight",
+              "model.layers.0.mlp.shared_expert.w13.weight"
+            ],
+            "shard_count": 8,
+            "shard_examples": [
+              "../model-00002-of-00002.safetensors",
+              "./shards/model-00001-of-00002.safetensors",
+              "MODEL-00001-OF-00002.SAFETENSORS",
+              "model-00001-of-00002.safetensors",
+              "model-00002-of-00002.safetensors"
+            ]
+          }
+        },
+        "notes": [],
+        "tags": [
+          "eos_token_id_list",
+          "has_readme"
+        ]
+      }
+    ]
+  }
+}

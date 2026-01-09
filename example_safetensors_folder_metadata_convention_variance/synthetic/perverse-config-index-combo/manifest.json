@@ -1,0 +1,118 @@
+{
+  "kind": "example_model_metadata_convention",
+  "id": "synthetic/perverse-config-index-combo",
+  "generated_at_utc": "2026-01-08T17:04:59Z",
+  "purpose": "Describe the on-disk metadata artifacts and noteworthy convention quirks for this example.",
+  "files": [
+    {
+      "name": "README.md",
+      "relative_path": "synthetic/perverse-config-index-combo/README.md",
+      "size_bytes": 642,
+      "sha256": "a2e3f252a0654edfc691d1f7157092199e37a91631b5de30bddaeea49939d56f"
+    },
+    {
+      "name": "config.json",
+      "relative_path": "synthetic/perverse-config-index-combo/config.json",
+      "size_bytes": 1342,
+      "sha256": "5f0779dd3f676416253fc26f33adc65ed2cd3b585392e18252a136de0996396a"
+    },
+    {
+      "name": "model.safetensors.index.json",
+      "relative_path": "synthetic/perverse-config-index-combo/model.safetensors.index.json",
+      "size_bytes": 1547,
+      "sha256": "d3a6129c11801c1a684e48f9a14c16e22e3555c9ea2e24a20fc0c59bb65b038a"
+    }
+  ],
+  "config_json": {
+    "present": true,
+    "relative_path": "synthetic/perverse-config-index-combo/config.json",
+    "size_bytes": 1342,
+    "parse_error": null,
+    "summary": {
+      "model_type": "moe_chaos",
+      "architectures": [
+        "DefinitelyNotARealModelForCausalLM"
+      ],
+      "num_hidden_layers": 60,
+      "n_layer": "64",
+      "num_layers": 62,
+      "hidden_size": 4096,
+      "d_model": "4096",
+      "num_experts": 8,
+      "n_routed_experts": "16",
+      "num_local_experts": 12,
+      "num_experts_per_tok": 2,
+      "experts_per_token": "4",
+      "moe_intermediate_size": 14336,
+      "expert_intermediate_size": "14336",
+      "shared_expert_intermediate_size": "7168",
+      "n_shared_experts": 1,
+      "decoder_sparse_step": "1",
+      "full_attention_interval": 4.0,
+      "first_k_dense_replace": "1",
+      "mlp_only_layers": [
+        0,
+        "1",
+        2,
+        "003"
+      ],
+      "quantization": {
+        "bits": 4,
+        "group_size": 64,
+        "backend": "mlx",
+        "dtype": "mxfp4",
+        "note": "This block is not standardized; it is here to demonstrate that some configs stash quantization metadata in arbitrary shapes."
+      },
+      "_key_count": 24,
+      "_quirks": [
+        "eos_token_id_is_list",
+        "has_quantization_block"
+      ]
+    }
+  },
+  "safetensors_index_json": {
+    "present": true,
+    "relative_path": "synthetic/perverse-config-index-combo/model.safetensors.index.json",
+    "size_bytes": 1547,
+    "parse_error": null,
+    "summary": {
+      "metadata_keys": [
+        "format",
+        "notes",
+        "source",
+        "total_size"
+      ],
+      "metadata_preview": {
+        "format": "pt",
+        "notes": [
+          "Intentionally perverse example for local dev.",
+          "Shard names mix separators, relative prefixes, and subdirectories.",
+          "Tensor names mix multiple naming conventions (model.*, transformer.*, layers.*)."
+        ],
+        "source": "synthetic",
+        "total_size": "1234567890"
+      },
+      "weight_map_entries": 14,
+      "weight_map_key_examples": [
+        "layers.0.experts.0.down_proj.weight",
+        "layers.0.experts.0.gate_proj.weight",
+        "layers.0.experts.0.up_proj.weight",
+        "model.embed_tokens.weight",
+        "model.layers.0.mlp.shared_expert.w13.weight"
+      ],
+      "shard_count": 8,
+      "shard_examples": [
+        "../model-00002-of-00002.safetensors",
+        "./shards/model-00001-of-00002.safetensors",
+        "MODEL-00001-OF-00002.SAFETENSORS",
+        "model-00001-of-00002.safetensors",
+        "model-00002-of-00002.safetensors"
+      ]
+    }
+  },
+  "tags": [
+    "eos_token_id_list",
+    "has_readme"
+  ],
+  "notes": []
+}

@@ -1,0 +1,81 @@
+{
+  "kind": "example_model_metadata_convention",
+  "id": "lmstudio-community/Qwen3-30B-A3B-Thinking-2507-MLX-8bit",
+  "generated_at_utc": "2026-01-08T17:04:59Z",
+  "purpose": "Describe the on-disk metadata artifacts and noteworthy convention quirks for this example.",
+  "files": [
+    {
+      "name": "config.json",
+      "relative_path": "lmstudio-community/Qwen3-30B-A3B-Thinking-2507-MLX-8bit/config.json",
+      "size_bytes": 1190,
+      "sha256": "f4c33969e88a34a35781fddf92c331348f16dbb5b82c60b718cf17eeec57a6a2"
+    },
+    {
+      "name": "model.safetensors.index.json",
+      "relative_path": "lmstudio-community/Qwen3-30B-A3B-Thinking-2507-MLX-8bit/model.safetensors.index.json",
+      "size_bytes": 119598,
+      "sha256": "b3025770273810c4d546267a4ba253d61a05bea76e74f7298f9451467656062d"
+    }
+  ],
+  "config_json": {
+    "present": true,
+    "relative_path": "lmstudio-community/Qwen3-30B-A3B-Thinking-2507-MLX-8bit/config.json",
+    "size_bytes": 1190,
+    "parse_error": null,
+    "summary": {
+      "model_type": "qwen3_moe",
+      "architectures": [
+        "Qwen3MoeForCausalLM"
+      ],
+      "num_hidden_layers": 48,
+      "hidden_size": 2048,
+      "num_experts": 128,
+      "num_experts_per_tok": 8,
+      "moe_intermediate_size": 768,
+      "decoder_sparse_step": 1,
+      "mlp_only_layers": [],
+      "quantization": {
+        "group_size": 64,
+        "bits": 8
+      },
+      "_key_count": 36,
+      "_quirks": [
+        "has_quantization_block"
+      ]
+    }
+  },
+  "safetensors_index_json": {
+    "present": true,
+    "relative_path": "lmstudio-community/Qwen3-30B-A3B-Thinking-2507-MLX-8bit/model.safetensors.index.json",
+    "size_bytes": 119598,
+    "parse_error": null,
+    "summary": {
+      "metadata_keys": [
+        "total_parameters",
+        "total_size"
+      ],
+      "metadata_preview": {
+        "total_parameters": 30532122624,
+        "total_size": 32440578048
+      },
+      "weight_map_entries": 1351,
+      "weight_map_key_examples": [
+        "lm_head.biases",
+        "lm_head.scales",
+        "lm_head.weight",
+        "model.embed_tokens.biases",
+        "model.embed_tokens.scales"
+      ],
+      "shard_count": 7,
+      "shard_examples": [
+        "model-00001-of-00007.safetensors",
+        "model-00002-of-00007.safetensors",
+        "model-00003-of-00007.safetensors",
+        "model-00004-of-00007.safetensors",
+        "model-00005-of-00007.safetensors"
+      ]
+    }
+  },
+  "tags": [],
+  "notes": []
+}

@@ -1,0 +1,84 @@
+{
+  "kind": "example_model_metadata_convention",
+  "id": "lmstudio-community/GLM-4.5-Air-mxfp4",
+  "generated_at_utc": "2026-01-08T17:04:59Z",
+  "purpose": "Describe the on-disk metadata artifacts and noteworthy convention quirks for this example.",
+  "files": [
+    {
+      "name": "config.json",
+      "relative_path": "lmstudio-community/GLM-4.5-Air-mxfp4/config.json",
+      "size_bytes": 1251,
+      "sha256": "36f86c7cc0fe6cc4febe3d4917daca507ad67eac5d36239e84b60a65ae36f7f6"
+    },
+    {
+      "name": "model.safetensors.index.json",
+      "relative_path": "lmstudio-community/GLM-4.5-Air-mxfp4/model.safetensors.index.json",
+      "size_bytes": 112669,
+      "sha256": "36099337ef7be88074614121596109837da921cf4923821cf451f0c3c49da6b8"
+    }
+  ],
+  "config_json": {
+    "present": true,
+    "relative_path": "lmstudio-community/GLM-4.5-Air-mxfp4/config.json",
+    "size_bytes": 1251,
+    "parse_error": null,
+    "summary": {
+      "model_type": "glm4_moe",
+      "architectures": [
+        "Glm4MoeForCausalLM"
+      ],
+      "num_hidden_layers": 46,
+      "hidden_size": 4096,
+      "n_routed_experts": 128,
+      "num_experts_per_tok": 8,
+      "moe_intermediate_size": 1408,
+      "n_shared_experts": 1,
+      "first_k_dense_replace": 1,
+      "quantization": {
+        "group_size": 64,
+        "bits": 4
+      },
+      "_key_count": 37,
+      "_quirks": [
+        "eos_token_id_is_list",
+        "has_quantization_block"
+      ]
+    }
+  },
+  "safetensors_index_json": {
+    "present": true,
+    "relative_path": "lmstudio-community/GLM-4.5-Air-mxfp4/model.safetensors.index.json",
+    "size_bytes": 112669,
+    "parse_error": null,
+    "summary": {
+      "metadata_keys": [
+        "total_parameters",
+        "total_size"
+      ],
+      "metadata_preview": {
+        "total_parameters": 106852251264,
+        "total_size": 56801458688
+      },
+      "weight_map_entries": 1239,
+      "weight_map_key_examples": [
+        "lm_head.scales",
+        "lm_head.weight",
+        "model.embed_tokens.scales",
+        "model.embed_tokens.weight",
+        "model.layers.0.input_layernorm.weight"
+      ],
+      "shard_count": 11,
+      "shard_examples": [
+        "model-00001-of-00011.safetensors",
+        "model-00002-of-00011.safetensors",
+        "model-00003-of-00011.safetensors",
+        "model-00004-of-00011.safetensors",
+        "model-00005-of-00011.safetensors"
+      ]
+    }
+  },
+  "tags": [
+    "eos_token_id_list"
+  ],
+  "notes": []
+}
