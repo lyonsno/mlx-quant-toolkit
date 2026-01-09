@@ -17,3 +17,5 @@
 - Decisions / tradeoffs:
   - Kept multi-commit behavior opt-in (agent must ask) to avoid noisy histories and repetitive log-update commits.
   - Explicitly documented sandbox/permission escalation for git operations to avoid index lock failures blocking progress.
+
+- Commit: `f869114c882604dcbcc4848a1f62bba4fa181500` — AGENTS defines commit-on-request protocol
