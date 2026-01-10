@@ -135,6 +135,9 @@ def init_run(root: Path, model_id: str, run_name: str, model_path: str | None) -
         "created_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
         "version": 2,
     }
+    # CONTRACT SURFACE: manifest.json (run bootstrap)
+    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs.
+    # Tests: rg 'manifest.json' tests/
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     cfg_path = run_dir / "analysis_config.json"
@@ -142,6 +145,9 @@ def init_run(root: Path, model_id: str, run_name: str, model_path: str | None) -
         cfg = DEFAULT_CONFIG.copy()
         if model_path:
             cfg["model_path"] = str(Path(model_path).expanduser().resolve())
+        # CONTRACT SURFACE: analysis_config.json template (run bootstrap)
+        # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs.
+        # Tests: rg 'analysis_config.json' tests/
         cfg_path.write_text(json.dumps(cfg, indent=2))
         print(f"[init_run] wrote config template to {cfg_path}")
     else:

@@ -31,6 +31,9 @@ def _read_df(path: Path) -> pd.DataFrame:
 
 
 def _write_df(df: pd.DataFrame, path: Path, fmt: str, compression: str | None):
+    # CONTRACT SURFACE: tables/*.parquet|csv Parquet→CSV fallback
+    # No write manifest for tables (ask before adding). Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs.
+    # Tests: rg 'build_tables' tests/
     path.parent.mkdir(parents=True, exist_ok=True)
     if fmt == "parquet":
         try:
@@ -98,14 +101,23 @@ def main():
 
     # per layer/proj
     A_layer = _agg_with_funcs(ms, ["layer", "proj"], stat_cols, ["median", "mean", "std", p90, p99])
+    # CONTRACT SURFACE: tables/A_weight_layer_summary.{parquet|csv}
+    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+    # Tests: rg 'A_weight_layer_summary' tests/
     _write_df(A_layer, run_dir / "tables" / "A_weight_layer_summary.parquet", fmt, compression)
 
     # per block4/proj
     A_block4 = _agg_with_funcs(ms, ["block4", "proj"], stat_cols, ["median", "mean", "std", p90, p99])
+    # CONTRACT SURFACE: tables/A_weight_block4_summary.{parquet|csv}
+    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+    # Tests: rg 'A_weight_block4_summary' tests/
     _write_df(A_block4, run_dir / "tables" / "A_weight_block4_summary.parquet", fmt, compression)
 
     # global/proj
     A_global = _agg_with_funcs(ms, ["proj"], stat_cols, ["min", p01, "median", p99, "max"])
+    # CONTRACT SURFACE: tables/A_weight_global_summary.{parquet|csv}
+    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+    # Tests: rg 'A_weight_global_summary' tests/
     _write_df(A_global, run_dir / "tables" / "A_weight_global_summary.parquet", fmt, compression)
 
     # -------- B: quant sim summaries --------
@@ -113,12 +125,21 @@ def main():
     qcols = [c for c in qcols if c in qs.columns]
 
     B_layer = _agg_with_funcs(qs, ["layer", "proj", "scheme"], qcols, ["median", "mean", p90, p99])
+    # CONTRACT SURFACE: tables/B_quant_layer_summary.{parquet|csv}
+    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+    # Tests: rg 'B_quant_layer_summary' tests/
     _write_df(B_layer, run_dir / "tables" / "B_quant_layer_summary.parquet", fmt, compression)
 
     B_block4 = _agg_with_funcs(qs, ["block4", "proj", "scheme"], qcols, ["median", "mean", p90, p99])
+    # CONTRACT SURFACE: tables/B_quant_block4_summary.{parquet|csv}
+    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+    # Tests: rg 'B_quant_block4_summary' tests/
     _write_df(B_block4, run_dir / "tables" / "B_quant_block4_summary.parquet", fmt, compression)
 
     B_global = _agg_with_funcs(qs, ["proj", "scheme"], qcols, ["min", p01, "median", p99, "max"])
+    # CONTRACT SURFACE: tables/B_quant_global_summary.{parquet|csv}
+    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+    # Tests: rg 'B_quant_global_summary' tests/
     _write_df(B_global, run_dir / "tables" / "B_quant_global_summary.parquet", fmt, compression)
 
     # -------- deltas (scheme A - scheme B) --------
@@ -158,6 +179,9 @@ def main():
             delta_rows.append(df)
 
         deltas = pd.concat(delta_rows, ignore_index=True) if delta_rows else pd.DataFrame()
+        # CONTRACT SURFACE: tables/B_quant_deltas.{parquet|csv}
+        # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+        # Tests: rg 'B_quant_deltas' tests/
         _write_df(deltas, run_dir / "tables" / "B_quant_deltas.parquet", fmt, compression)
 
     print("[build_tables] wrote tables/ A_* and B_*")

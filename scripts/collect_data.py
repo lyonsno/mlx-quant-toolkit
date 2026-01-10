@@ -880,6 +880,9 @@ def main():
 
                     logs_dir = run_dir / "logs"
                     logs_dir.mkdir(parents=True, exist_ok=True)
+                    # CONTRACT SURFACE: logs/model_config.raw.json + logs/model_shape_budget.json
+                    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+                    # Tests: rg 'model_shape_budget.json' tests/
                     (logs_dir / "model_config.raw.json").write_text(
                         json.dumps(raw_cfg, indent=2)
                     )
@@ -1260,6 +1263,9 @@ def main():
 
         logs_dir = run_dir / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
+        # CONTRACT SURFACE: logs/index_report.json
+        # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+        # Tests: rg 'index_report.json' tests/
         (logs_dir / "index_report.json").write_text(json.dumps(report, indent=2))
 
         if missing_shards_report:
@@ -1302,6 +1308,9 @@ def main():
     um_df = pd.DataFrame(unmatched_rows) if unmatched_rows else pd.DataFrame()
     wl_df = pd.DataFrame({"warning": warn_log}) if warn_log else pd.DataFrame()
 
+    # CONTRACT SURFACE: write_manifest.artifacts stable key map
+    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+    # Tests: rg 'write_manifest.json' tests/
     artifacts: Dict[str, Any] = {}
     artifacts["tensor_inventory"] = _artifact_entry(
         _write_df(inv_df, run_dir / "data" / "tensor_inventory.parquet", fmt, compression),
@@ -1325,6 +1334,9 @@ def main():
             len(um_df),
         )
     if not wl_df.empty:
+        # CONTRACT SURFACE: logs/warnings.{parquet|csv} + write_manifest.artifacts["warnings"]
+        # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+        # Tests: rg 'warnings.parquet' tests/
         artifacts["warnings"] = _artifact_entry(
             _write_df(wl_df, run_dir / "logs" / "warnings.parquet", fmt, compression),
             run_dir,
@@ -1337,6 +1349,9 @@ def main():
         "requested_compression": compression,
         "artifacts": artifacts,
     }
+    # CONTRACT SURFACE: logs/write_manifest.json
+    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+    # Tests: rg 'write_manifest.json' tests/
     _write_json(write_manifest, run_dir / "logs" / "write_manifest.json")
 
     dt = time.time() - t0
@@ -1412,6 +1427,9 @@ def main():
         ],
         "index_summary": index_summary,
     }
+    # CONTRACT SURFACE: logs/run_health.json
+    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+    # Tests: rg 'run_health.json' tests/
     _write_json(run_health, run_dir / "logs" / "run_health.json")
 
     # Persist a durable context snapshot so "haunted runs" can be reconstructed.
@@ -1451,6 +1469,9 @@ def main():
         "scan_plan": scan_plan,
         "index": index_info,
     }
+    # CONTRACT SURFACE: logs/run_context.json
+    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+    # Tests: rg 'run_context.json' tests/
     _write_json(run_context, run_dir / "logs" / "run_context.json")
     print(f"[collect] done in {dt:.1f}s")
     print(f"[collect] tensor_inventory rows: {len(inv_df)}")

@@ -244,9 +244,9 @@ runs/<model-id>/<run-name>/
     index_report.json                        (only if index mode is active and parses)
     model_config.raw.json                    (metadata enabled + config found)
     model_shape_budget.json                  (metadata enabled + config found)
-    run_context.json                         (always)
-    run_health.json                          (always)
-    write_manifest.json                      (always)
+    run_context.json                         (written on successful completion of collect_data.py)
+    run_health.json                          (written on successful completion of collect_data.py)
+    write_manifest.json                      (written on successful completion of collect_data.py)
   cache/
     sampled_indices/                         (deterministic sampling cache)
   plots/                                     (created by init_run; reserved for plots)
@@ -258,12 +258,20 @@ runs/<model-id>/<run-name>/
 
 ### Auditability artifacts (logs)
 
+These log outputs are contract surfaces: they are designed to be stable, auditable artifacts.
+However, early exits (non-zero exit) may occur before some logs are written, so absence can mean
+"failed before emission" rather than "not applicable".
+
+Contract-writing blocks in code are tagged with short `CONTRACT SURFACE:` markers (search in `scripts/`).
+`cache/` and `plots/` are internal implementation details and are not stable interfaces.
+
 - `logs/run_context.json` records:
   - configured vs resolved `model_path`
   - any CLI overrides (e.g. `--model-path`)
   - the final scan plan (`scan_mode`, scanned files count/examples, etc.)
   - index status (`disabled` / `not_found` / `active` / `unavailable` / `error`)
   - index discovery fields (`searched`, `found`, `active`) and the resolved `index_path` (or null)
+  - note: `index.index_path` may be set even when `status == "error"` (discovered, but parse failed)
 - `logs/write_manifest.json` records:
   - requested output settings (`format`, `compression`)
   - the actual written artifact paths, formats, row counts, and Parquet→CSV fallbacks
