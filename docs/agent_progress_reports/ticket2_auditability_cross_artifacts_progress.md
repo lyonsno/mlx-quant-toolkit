@@ -15,3 +15,5 @@
 - Decisions: enforce CSV row count checks only when manifest format is CSV to avoid parquet dependency.
 - Assumptions: `matrix_stats_rows` equals 2 for the indexed run (rule + fallback extraction).
 - Risk of test loophole: parquet outputs are not row-count-validated when format is not CSV.
+
+- Commit: 25b7e76d4a56b82fa64e3efeaceeec0ed49f9151 Strengthen auditability cross-artifact tests
