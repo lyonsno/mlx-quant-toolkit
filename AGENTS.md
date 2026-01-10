@@ -67,34 +67,6 @@ Done when:
 
 If the user explicitly says “do it end-to-end in one go,” you can do both phases without stopping.
 
-## Commit protocol (when requested)
-
-Only follow this protocol when the user explicitly asks the agent to commit changes.
-
-1) Preview the commit message before committing.
-- Propose the exact subject line and a short declarative description of the high-level changes.
-- Use declarative voice (avoid “I/We …”).
-
-2) Stage “all work” as: all current changes vs `HEAD`.
-- Include tracked modifications and any new untracked files created for the ticket.
-- If staging fails due to sandbox/permission errors (for example: `.git/index.lock`), request approval to rerun with escalated permissions.
-
-3) Create a “substantive” commit that includes the progress report file, but does not describe it.
-- Stage and commit all ticket-intended changes, including the relevant progress report under `docs/agent_progress_reports/`.
-- Write a comprehensive declarative description of the substantive changes in the commit message.
-- Do not mention the progress report/log file in the commit message.
-
-4) Propagate the substantive commit hash into the progress report, then commit the progress report again.
-- Append a new line to the progress report with:
-  - the substantive commit hash, and
-  - a short snippet (the subject line) of the substantive commit message.
-- Commit only the progress report update as a second “log update” commit.
-- Do not attempt to record the second “log update” commit hash inside the progress report (avoid infinite regress).
-
-5) Multiple substantive commits are opt-in.
-- Default behavior is a single substantive commit per ticket.
-- If multiple substantive commits would be beneficial, ask the user first; if approved, batch progress-report hash propagation into a single log update at the end.
-
 ## Phase 3 - Iteration
 - if new adjustments are requested, the process should start over from phase one, and stop for test review before preceding to implementation
 ---
