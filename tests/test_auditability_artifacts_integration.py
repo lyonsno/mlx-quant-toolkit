@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 import subprocess
@@ -10,8 +11,30 @@ import numpy as np
 
 
 class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
+    _REQUIRED_ARTIFACT_KEYS = {"path", "format", "fallback", "error", "rows"}
+
     def setUp(self) -> None:
         self.repo_root = Path(__file__).resolve().parents[1]
+
+    def _assert_required_keys_subset(
+        self,
+        payload: dict,
+        required_keys: set[str],
+        label: str,
+    ) -> None:
+        self.assertIsInstance(payload, dict)
+        missing = sorted(set(required_keys) - set(payload))
+        self.assertFalse(missing, f"{label} missing keys: {missing}")
+
+    def _assert_artifact_entry(self, name: str, artifact: dict) -> None:
+        self._assert_required_keys_subset(
+            artifact,
+            self._REQUIRED_ARTIFACT_KEYS,
+            f"artifact {name}",
+        )
+        if artifact.get("fallback"):
+            self.assertIsInstance(artifact.get("error"), str)
+            self.assertTrue(artifact.get("error"))
 
     def _resolve_manifest_path(self, run_dir: Path, path_value: str | None) -> Path:
         self.assertIsNotNone(path_value)
@@ -20,6 +43,22 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
         if not path.is_absolute():
             path = run_dir / path
         return path
+
+    def _csv_row_count(self, path: Path) -> int:
+        with path.open(newline="") as handle:
+            reader = csv.reader(handle)
+            try:
+                next(reader)
+            except StopIteration:
+                return 0
+            return sum(1 for _ in reader)
+
+    def _assert_manifest_rows_match_csv(self, run_dir: Path, artifact: dict) -> None:
+        if artifact.get("format") != "csv":
+            return
+        path = self._resolve_manifest_path(run_dir, artifact.get("path"))
+        self.assertTrue(path.exists())
+        self.assertEqual(self._csv_row_count(path), artifact.get("rows"))
 
     def _assert_relative_path_example_endswith(self, value: object, suffix: str) -> None:
         if isinstance(value, list) and value:
@@ -161,6 +200,11 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             context_path = run_dir / "logs" / "run_context.json"
             self.assertTrue(context_path.exists())
             context = json.loads(context_path.read_text())
+            self._assert_required_keys_subset(
+                context,
+                {"generated_at", "run", "model_path", "cli_overrides", "scan_plan", "index"},
+                "run_context",
+            )
 
             model_path_info = context.get("model_path", {})
             self.assertEqual(model_path_info.get("resolved"), str(model_dir.resolve()))
@@ -180,6 +224,14 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             )
 
             index_info = context.get("index", {})
+            self._assert_required_keys_subset(
+                index_info,
+                {"status", "searched", "found", "active", "index_path"},
+                "run_context.index",
+            )
+            if index_info.get("status") == "error":
+                self.assertIsInstance(index_info.get("error"), str)
+                self.assertTrue(index_info.get("error"))
             self.assertEqual(index_info.get("status"), "active")
             self.assertEqual(index_info.get("searched"), True)
             self.assertEqual(index_info.get("found"), True)
@@ -192,11 +244,18 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             manifest_path = run_dir / "logs" / "write_manifest.json"
             self.assertTrue(manifest_path.exists())
             write_manifest = json.loads(manifest_path.read_text())
+            self._assert_required_keys_subset(
+                write_manifest,
+                {"generated_at", "requested_format", "requested_compression", "artifacts"},
+                "write_manifest",
+            )
             self.assertEqual(write_manifest.get("requested_format"), "parquet")
             self.assertEqual(write_manifest.get("requested_compression"), "invalid-codec")
 
             artifacts = write_manifest.get("artifacts", {})
             self.assertIn("tensor_inventory", artifacts)
+            for name, artifact in artifacts.items():
+                self._assert_artifact_entry(name, artifact)
 
             inv = artifacts["tensor_inventory"]
             self.assertEqual(inv.get("format"), "csv")
@@ -206,18 +265,47 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             self.assertEqual(inv.get("rows"), 1)
             self.assertTrue(inv.get("path", "").endswith("tensor_inventory.csv"))
             self.assertTrue(self._resolve_manifest_path(run_dir, inv.get("path")).exists())
+            self._assert_manifest_rows_match_csv(run_dir, inv)
 
             stats = artifacts.get("matrix_stats", {})
             self.assertEqual(stats.get("rows"), 1)
             self.assertTrue(self._resolve_manifest_path(run_dir, stats.get("path")).exists())
+            self._assert_manifest_rows_match_csv(run_dir, stats)
 
             quant = artifacts.get("quant_sim", {})
             self.assertEqual(quant.get("rows"), 0)
             self.assertTrue(self._resolve_manifest_path(run_dir, quant.get("path")).exists())
+            self._assert_manifest_rows_match_csv(run_dir, quant)
 
             health = json.loads((run_dir / "logs" / "run_health.json").read_text())
             scan_summary = health.get("scan_summary", {})
-            self.assertEqual(scan_summary.get("files_scanned"), 1)
+            outputs = health.get("outputs_written", {})
+            self._assert_required_keys_subset(
+                outputs,
+                {
+                    "format",
+                    "tensor_inventory_rows",
+                    "matrix_stats_rows",
+                    "quant_sim_rows",
+                    "wrote_warnings",
+                    "wrote_unmatched_tensors",
+                    "wrote_index_report",
+                },
+                "run_health.outputs_written",
+            )
+            self.assertEqual(scan_summary.get("files_scanned"), scan_plan.get("scanned_files_count"))
+            self.assertEqual(outputs.get("tensor_inventory_rows"), inv.get("rows"))
+            self.assertEqual(outputs.get("matrix_stats_rows"), stats.get("rows"))
+            self.assertEqual(outputs.get("quant_sim_rows"), quant.get("rows"))
+            self.assertEqual(outputs.get("wrote_warnings"), "warnings" in artifacts)
+            if outputs.get("wrote_warnings"):
+                warnings_meta = artifacts.get("warnings", {})
+                warnings_path = self._resolve_manifest_path(run_dir, warnings_meta.get("path"))
+                self.assertTrue(warnings_path.exists())
+            index_report_path = run_dir / "logs" / "index_report.json"
+            self.assertEqual(outputs.get("wrote_index_report"), index_report_path.exists())
+            self.assertTrue(outputs.get("wrote_index_report"))
+            self.assertTrue(index_report_path.exists())
 
     def test_collect_data_run_context_logs_index_status_when_index_missing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -241,9 +329,17 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             self._run_collect(run_dir, None, self._env(), check=True)
 
             context = json.loads((run_dir / "logs" / "run_context.json").read_text())
+            self._assert_required_keys_subset(
+                context,
+                {"generated_at", "run", "model_path", "cli_overrides", "scan_plan", "index"},
+                "run_context",
+            )
             index_info = context.get("index", {})
-            for key in ["status", "searched", "found", "active", "index_path"]:
-                self.assertIn(key, index_info)
+            self._assert_required_keys_subset(
+                index_info,
+                {"status", "searched", "found", "active", "index_path"},
+                "run_context.index",
+            )
             self.assertEqual(index_info.get("status"), "not_found")
             self.assertEqual(index_info.get("searched"), True)
             self.assertEqual(index_info.get("found"), False)
@@ -272,11 +368,119 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             self._run_collect(run_dir, None, self._env(), check=True)
 
             context = json.loads((run_dir / "logs" / "run_context.json").read_text())
+            self._assert_required_keys_subset(
+                context,
+                {"generated_at", "run", "model_path", "cli_overrides", "scan_plan", "index"},
+                "run_context",
+            )
             index_info = context.get("index", {})
-            for key in ["status", "searched", "found", "active", "index_path"]:
-                self.assertIn(key, index_info)
+            self._assert_required_keys_subset(
+                index_info,
+                {"status", "searched", "found", "active", "index_path"},
+                "run_context.index",
+            )
             self.assertEqual(index_info.get("status"), "disabled")
             self.assertEqual(index_info.get("searched"), False)
             self.assertEqual(index_info.get("found"), False)
             self.assertEqual(index_info.get("active"), False)
             self.assertIsNone(index_info.get("index_path"))
+
+    def test_collect_data_run_context_logs_index_status_when_index_parse_error(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            tensor_name = "layers.0.experts.0.up_proj.weight"
+            arr = np.arange(4, dtype=np.float32).reshape(2, 2)
+            np.savez(model_dir / "shard1.npz", **{tensor_name: arr})
+
+            (model_dir / "model.safetensors.index.json").write_text(
+                json.dumps({"metadata": {"format": "npz-test"}}, indent=2)
+            )
+
+            run_dir = self._init_run_dir(tmp_path, "index-parse-error")
+            self._write_config(
+                run_dir,
+                model_dir,
+                use_index=True,
+                output_format="csv",
+                compression=None,
+            )
+
+            self._run_collect(run_dir, None, self._env(), check=True)
+
+            context = json.loads((run_dir / "logs" / "run_context.json").read_text())
+            self._assert_required_keys_subset(
+                context,
+                {"generated_at", "run", "model_path", "cli_overrides", "scan_plan", "index"},
+                "run_context",
+            )
+            index_info = context.get("index", {})
+            self._assert_required_keys_subset(
+                index_info,
+                {"status", "searched", "found", "active", "index_path"},
+                "run_context.index",
+            )
+            self.assertEqual(index_info.get("status"), "error")
+            self.assertEqual(index_info.get("searched"), True)
+            self.assertEqual(index_info.get("found"), True)
+            self.assertEqual(index_info.get("active"), False)
+            self.assertIsInstance(index_info.get("error"), str)
+            self.assertTrue(index_info.get("error"))
+            index_path = index_info.get("index_path")
+            self.assertIsInstance(index_path, str)
+            self.assertEqual(
+                Path(index_path).resolve(),
+                (model_dir / "model.safetensors.index.json").resolve(),
+            )
+
+            write_manifest = json.loads((run_dir / "logs" / "write_manifest.json").read_text())
+            self._assert_required_keys_subset(
+                write_manifest,
+                {"generated_at", "requested_format", "requested_compression", "artifacts"},
+                "write_manifest",
+            )
+            artifacts = write_manifest.get("artifacts", {})
+            for name, artifact in artifacts.items():
+                self._assert_artifact_entry(name, artifact)
+
+            self.assertIn("warnings", artifacts)
+            warnings_meta = artifacts.get("warnings", {})
+            warnings_path = self._resolve_manifest_path(run_dir, warnings_meta.get("path"))
+            self.assertTrue(warnings_path.exists())
+            self.assertGreater(warnings_meta.get("rows"), 0)
+
+            inv = artifacts.get("tensor_inventory", {})
+            stats = artifacts.get("matrix_stats", {})
+            quant = artifacts.get("quant_sim", {})
+            self._assert_manifest_rows_match_csv(run_dir, inv)
+            self._assert_manifest_rows_match_csv(run_dir, stats)
+            self._assert_manifest_rows_match_csv(run_dir, quant)
+
+            health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            scan_summary = health.get("scan_summary", {})
+            outputs = health.get("outputs_written", {})
+            self._assert_required_keys_subset(
+                outputs,
+                {
+                    "format",
+                    "tensor_inventory_rows",
+                    "matrix_stats_rows",
+                    "quant_sim_rows",
+                    "wrote_warnings",
+                    "wrote_unmatched_tensors",
+                    "wrote_index_report",
+                },
+                "run_health.outputs_written",
+            )
+            scan_plan = context.get("scan_plan", {})
+            self.assertEqual(scan_summary.get("files_scanned"), scan_plan.get("scanned_files_count"))
+            self.assertEqual(outputs.get("tensor_inventory_rows"), inv.get("rows"))
+            self.assertEqual(outputs.get("matrix_stats_rows"), stats.get("rows"))
+            self.assertEqual(outputs.get("quant_sim_rows"), quant.get("rows"))
+            self.assertEqual(outputs.get("wrote_warnings"), "warnings" in artifacts)
+            index_report_path = run_dir / "logs" / "index_report.json"
+            self.assertEqual(outputs.get("wrote_index_report"), index_report_path.exists())
+            self.assertFalse(outputs.get("wrote_index_report"))
+            self.assertFalse(index_report_path.exists())

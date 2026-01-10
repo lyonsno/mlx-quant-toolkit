@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 import subprocess
@@ -11,8 +12,30 @@ import numpy as np
 
 
 class RunHealthJsonIntegrationTests(unittest.TestCase):
+    _REQUIRED_ARTIFACT_KEYS = {"path", "format", "fallback", "error", "rows"}
+
     def setUp(self) -> None:
         self.repo_root = Path(__file__).resolve().parents[1]
+
+    def _assert_required_keys_subset(
+        self,
+        payload: dict,
+        required_keys: set[str],
+        label: str,
+    ) -> None:
+        self.assertIsInstance(payload, dict)
+        missing = sorted(set(required_keys) - set(payload))
+        self.assertFalse(missing, f"{label} missing keys: {missing}")
+
+    def _assert_artifact_entry(self, name: str, artifact: dict) -> None:
+        self._assert_required_keys_subset(
+            artifact,
+            self._REQUIRED_ARTIFACT_KEYS,
+            f"artifact {name}",
+        )
+        if artifact.get("fallback"):
+            self.assertIsInstance(artifact.get("error"), str)
+            self.assertTrue(artifact.get("error"))
 
     def _env(self) -> dict:
         env = os.environ.copy()
@@ -35,6 +58,29 @@ class RunHealthJsonIntegrationTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+
+    def _resolve_manifest_path(self, run_dir: Path, path_value: str | None) -> Path:
+        self.assertIsNotNone(path_value)
+        path = Path(path_value)
+        if not path.is_absolute():
+            path = run_dir / path
+        return path
+
+    def _csv_row_count(self, path: Path) -> int:
+        with path.open(newline="") as handle:
+            reader = csv.reader(handle)
+            try:
+                next(reader)
+            except StopIteration:
+                return 0
+            return sum(1 for _ in reader)
+
+    def _assert_manifest_rows_match_csv(self, run_dir: Path, artifact: dict) -> None:
+        if artifact.get("format") != "csv":
+            return
+        path = self._resolve_manifest_path(run_dir, artifact.get("path"))
+        self.assertTrue(path.exists())
+        self.assertEqual(self._csv_row_count(path), artifact.get("rows"))
 
     def test_collect_data_writes_run_health_json_with_summary_and_index_counts(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -128,6 +174,33 @@ class RunHealthJsonIntegrationTests(unittest.TestCase):
 
             self._run_collect(run_dir, model_dir, self._env(), check=True)
 
+            context = json.loads((run_dir / "logs" / "run_context.json").read_text())
+            self._assert_required_keys_subset(
+                context,
+                {"generated_at", "run", "model_path", "cli_overrides", "scan_plan", "index"},
+                "run_context",
+            )
+            scan_plan = context.get("scan_plan", {})
+            index_info = context.get("index", {})
+            self._assert_required_keys_subset(
+                index_info,
+                {"status", "searched", "found", "active", "index_path"},
+                "run_context.index",
+            )
+            if index_info.get("status") == "error":
+                self.assertIsInstance(index_info.get("error"), str)
+                self.assertTrue(index_info.get("error"))
+
+            write_manifest = json.loads((run_dir / "logs" / "write_manifest.json").read_text())
+            self._assert_required_keys_subset(
+                write_manifest,
+                {"generated_at", "requested_format", "requested_compression", "artifacts"},
+                "write_manifest",
+            )
+            artifacts = write_manifest.get("artifacts", {})
+            for name, artifact in artifacts.items():
+                self._assert_artifact_entry(name, artifact)
+
             health_path = run_dir / "logs" / "run_health.json"
             self.assertTrue(health_path.exists())
 
@@ -174,10 +247,25 @@ class RunHealthJsonIntegrationTests(unittest.TestCase):
             self.assertEqual(extraction.get("unmatched_expertish"), 1)
 
             outputs = health["outputs_written"]
+            self._assert_required_keys_subset(
+                outputs,
+                {
+                    "format",
+                    "tensor_inventory_rows",
+                    "matrix_stats_rows",
+                    "quant_sim_rows",
+                    "wrote_warnings",
+                    "wrote_unmatched_tensors",
+                    "wrote_index_report",
+                },
+                "run_health.outputs_written",
+            )
             self.assertEqual(outputs.get("format"), "csv")
             self.assertEqual(outputs.get("tensor_inventory_rows"), 3)
+            self.assertEqual(outputs.get("matrix_stats_rows"), 2)
             self.assertEqual(outputs.get("quant_sim_rows"), 0)
             self.assertEqual(outputs.get("unmatched_tensors_rows"), 1)
+            self.assertTrue(outputs.get("wrote_unmatched_tensors"))
 
             examples = health["tensor_name_examples"]
             self.assertIn(t_rule, examples.get("rule_extracted", []))
@@ -197,6 +285,26 @@ class RunHealthJsonIntegrationTests(unittest.TestCase):
             self.assertEqual(index_summary.get("missing_shards_count"), 1)
             self.assertEqual(index_summary.get("missing_tensors_count"), 2)
             self.assertEqual(index_summary.get("extra_tensors_count"), 1)
+
+            self.assertEqual(scan_summary.get("files_scanned"), scan_plan.get("scanned_files_count"))
+            inv = artifacts.get("tensor_inventory", {})
+            stats = artifacts.get("matrix_stats", {})
+            quant = artifacts.get("quant_sim", {})
+            self.assertEqual(outputs.get("tensor_inventory_rows"), inv.get("rows"))
+            self.assertEqual(outputs.get("matrix_stats_rows"), stats.get("rows"))
+            self.assertEqual(outputs.get("quant_sim_rows"), quant.get("rows"))
+            self.assertEqual(outputs.get("wrote_warnings"), "warnings" in artifacts)
+            if outputs.get("wrote_warnings"):
+                warnings_meta = artifacts.get("warnings", {})
+                warnings_path = self._resolve_manifest_path(run_dir, warnings_meta.get("path"))
+                self.assertTrue(warnings_path.exists())
+            index_report_path = run_dir / "logs" / "index_report.json"
+            self.assertEqual(outputs.get("wrote_index_report"), index_report_path.exists())
+            self.assertTrue(outputs.get("wrote_index_report"))
+            self.assertTrue(index_report_path.exists())
+            self._assert_manifest_rows_match_csv(run_dir, inv)
+            self._assert_manifest_rows_match_csv(run_dir, stats)
+            self._assert_manifest_rows_match_csv(run_dir, quant)
 
     def test_collect_data_run_health_counts_observed_tensors_even_with_duplicates_without_index(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
