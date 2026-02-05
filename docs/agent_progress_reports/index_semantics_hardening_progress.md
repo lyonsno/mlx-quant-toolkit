@@ -73,3 +73,4 @@ Changes made:
 Changes made:
 - Moved fallback-visibility item out of Remaining/Planned and into Recently Resolved in future_work/current_work.md.
 - Fixed README.md typo in index field definitions.
+Commit: 6845b8a Harden index semantics and logging
