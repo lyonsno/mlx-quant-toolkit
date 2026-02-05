@@ -4,6 +4,7 @@ Remaining Identified Issues
 - `scripts/collect_data.py`: when `model_path` is a *file* and `scan.use_safetensors_index_json=true`, index discovery in the parent directory can expand the scan beyond that single file; this behavior is currently implicit and should be an explicit contract (and logged).
 - `scripts/collect_data.py`: fallback extraction is intentionally heuristic, but runs provide little visibility into how often it was used (risk: “plausible but wrong” axis assumptions). Add run-level visibility.
 - `scripts/collect_data.py`: `scan.strict_index` only enforces shard presence after a valid index parse; decide what “strict” means when the index is missing or invalid (fail vs warn + fallback).
+- Hard errors are inconsistently surfaced (SystemExit vs tracebacks) and usually produce no structured failure artifacts; `strict_index` semantics are also mid-transition (tests leaning toward “strict requires active index”). See `future_work/error_logging_and_hard_error_consistency.md`.
 
 Planned Changes
 
