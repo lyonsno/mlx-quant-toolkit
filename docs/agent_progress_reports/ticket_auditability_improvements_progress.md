@@ -89,3 +89,61 @@ Add auditability artifacts so runs can be reconstructed:
 
 ## commit
 - [main 764c3da] feat(audit): add run_context + write_manifest artifacts
+
+---
+
+## Inventory: error types + where they’re recorded
+
+### Hard errors (non-zero exit)
+
+#### `scripts/collect_data.py`
+- **Explicit `SystemExit` (clean one-line stderr, no traceback)**
+  - Missing config: `_load_config()` raises `SystemExit("Missing config: … (run init_run.py first)")`
+  - Missing model_path: `main()` raises `SystemExit("model_path does not exist: …")`
+  - Strict index missing shard(s): `main()` raises `SystemExit("[index] missing shard(s) referenced by index: …")` when `index_ready` and `scan.strict_index=True`
+  - **Recorded where:** console output only; no `logs/run_context.json`, `logs/run_health.json`, `logs/write_manifest.json`, `logs/warnings.*` (these are written only on successful completion).
+
+- **Explicit exception raised to crash (traceback)**
+  - Packed split mismatch: `_apply_rules()` raises `PackedSplitError(...)`, and the scan loop re-raises when `parsing.strict_packed_split=True`.
+  - **Recorded where:** console traceback only; no durable run logs/artifacts beyond whatever was written earlier in the run (e.g., `logs/model_shape_budget.json` if metadata was enabled and succeeded before the crash).
+
+- **Implicit/unhandled exceptions (traceback)**
+  - Invalid JSON config: `json.loads` in `_load_config()` -> `JSONDecodeError`
+  - Missing required config keys: e.g., `cfg["scan"]`, `cfg["parsing"]` -> `KeyError`
+  - Invalid regexes: `re.compile(...)` -> `re.error`
+  - Corrupted weight files: `.npz` -> `zipfile.BadZipFile`/`ValueError`, `.safetensors` -> safetensors exceptions, etc. (from `_iter_tensors_from_file`)
+  - bfloat16 decode failure: `_iter_tensors_from_file()` raises `RuntimeError(...)` if `ml-dtypes` can’t be registered
+  - **Recorded where:** console traceback only; same “no run_context/run_health/write_manifest/warnings” limitation.
+
+#### `scripts/build_tables.py`
+- Missing inputs: `_read_df(...)` raises `FileNotFoundError`
+- Schema/column issues: `KeyError`/`AttributeError` from pandas ops if inputs don’t match expected schema
+- **Recorded where:** console traceback only; no auditability artifacts are written by `build_tables.py` today.
+
+#### `scripts/init_run.py`
+- Mostly unhandled filesystem/argparse errors (permissions, invalid paths).
+- **Recorded where:** console traceback only (plus any partial directories/files created before the failure).
+
+### Soft errors (run continues)
+
+#### Warnings log (`logs/warnings.{parquet|csv}` via `warn_log`)
+Produced during `collect_data.py`, written only on success, tagged by prefix:
+- `[meta]`: metadata/config.json missing/invalid, metadata module unavailable
+- `[index]`: index module unavailable; index parse failure; post-scan index mismatches (missing/extra shards/tensors)
+- `[extract]`: rule application failed, fallback extract failed; packed_split mismatch when `strict_packed_split=False`
+- `[quant_sim]`: MLX missing (also emitted via `warnings.warn`), per-scheme quantize/dequant failures
+
+#### Index report (`logs/index_report.json`)
+- Written only when the index parsed successfully (`index_active`) and the run completes.
+- Records missing/extra shards/tensors + `index_metadata`.
+
+#### Per-row recorded “errors” (not a hard error)
+- Quant sim scheme failures are recorded in `data/quant_sim.*` via the `error` column (rows still emitted for coverage).
+
+#### Parquet → CSV fallback recording (not a hard error)
+- `collect_data.py` prints `[warn] parquet write failed (...)` to stdout and records fallback + error string in `logs/write_manifest.json` (`artifacts[...].fallback/error`).
+- `build_tables.py` silently falls back to CSV on parquet write error (no manifest today).
+
+### Consistency takeaway (as of now)
+- “Hard errors” are **not standardized**: some are `SystemExit` (no traceback) and others are exceptions (traceback).
+- On hard failure, we currently **do not persist** `run_context.json`, `run_health.json`, `write_manifest.json`, or `warnings.*`, so hard errors are observable primarily via stderr/traceback (and any artifacts written earlier in the run, like metadata logs).
