@@ -13,9 +13,7 @@ them as final contracts. This section summarizes the open decisions so readers g
 up front, and the `*` markers below point to the exact spots they affect.
 
 Pending decisions (*):
-- How `scan.strict_index` should behave when the index is missing or invalid.
 - Whether `packed_split.projs` values must be canonicalized via `proj_aliases`, and how strict to be.
-- How to define the contract for single-file `model_path` when an index exists in the parent dir.
 
 ## Quickstart
 
@@ -112,7 +110,7 @@ Important keys under `scan`:
 - `include_shared_expert`: include shared expert tensors when present
 - `inventory_all_tensors`: if true, inventory every tensor (even non-float weights)
 - `use_safetensors_index_json`: if true, prefer scanning only the shards referenced by an index file
-- `strict_index`*: when index mode is active, fail if the index references missing shards
+- `strict_index`: only meaningful when `use_safetensors_index_json=true`; require a valid (parseable) index whenever discovery is enabled, fail on missing indexed shards when index mode is active, and (for file `model_path`) enforce index validity without expanding the scan or requiring other shards
 
 ### Parsing options
 
@@ -241,7 +239,7 @@ runs/<model-id>/<run-name>/
     B_quant_deltas.{parquet|csv}             (optional; requires `delta_pairs`)
   logs/
     warnings.{parquet|csv}                   (only if warnings were emitted)
-    index_report.json                        (only if index mode is active and parses)
+    index_report.json                        (only if `used_for_scan` is true)
     model_config.raw.json                    (metadata enabled + config found)
     model_shape_budget.json                  (metadata enabled + config found)
     run_context.json                         (written on successful completion of collect_data.py)
@@ -270,7 +268,7 @@ Contract-writing blocks in code are tagged with short `CONTRACT SURFACE:` marker
   - any CLI overrides (e.g. `--model-path`)
   - the final scan plan (`scan_mode`, scanned files count/examples, etc.)
   - index status (`disabled` / `not_found` / `active` / `unavailable` / `error`)
-  - index discovery fields (`searched`, `found`, `active`) and the resolved `index_path` (or null)
+  - index discovery fields (`searched`, `found`, `parsed`, `active`, `used_for_scan`) and the resolved `index_path` (or null)
   - note: `index.index_path` may be set even when `status == "error"` (discovered, but parse failed)
 - `logs/write_manifest.json` records:
   - requested output settings (`format`, `compression`)
@@ -281,7 +279,7 @@ Contract-writing blocks in code are tagged with short `CONTRACT SURFACE:` marker
   - output summary (row counts, format, and whether optional artifacts were written)
   - the effective `config_used` snapshot (including any CLI overrides)
   - tensor name format info + a small set of example tensor names
-  - index summary counts when index mode is active
+  - index summary counts when index mode is active, plus `parsed` / `active` / `used_for_scan` flags
 
 ### Data artifacts (high-level schema)
 
@@ -304,9 +302,18 @@ If `scan.use_safetensors_index_json=true` and an index file exists (either
 `model.safetensors.index.json` or `*.safetensors.index.json` in the model directory),
 `collect_data.py` will prefer scanning only the shards referenced by the index.
 
-Note: if `model_path` points to a single shard file, index discovery is performed in the
-parent directory. If an index is found, scanning may expand to additional shards referenced
-by that index*. The final decision is recorded in `logs/run_context.json` under `scan_plan`.
+Note: if `model_path` points to a single shard file, index discovery/parse is still performed in the
+parent directory for reporting, but scanning stays anchored to that file. When an index is
+found in this case, `collect_data.py` prints an explicit warning and records
+`scan_plan.index_discovered_but_ignored_due_to_file_model_path=true` in `logs/run_context.json`.
+To scan the full indexed shard set, pass the model directory instead of the file path.
+
+Definitions for index fields in `logs/run_context.json` / `logs/run_health.json`:
+
+- `parsed`: index JSON was found and successfully parsed into a `weight_map`.
+- `status`: discovery/parse outcome for the index JSON (independent of whether it was used to choose files).
+- `active` / `used_for_scan`: the index was actually used to determine which shard files were scanned.
+  When `model_path` is a file, `parsed` may be true while `active` / `used_for_scan` is false.
 
 When index mode is active:
 
@@ -315,16 +322,16 @@ When index mode is active:
 - `data/tensor_inventory.*` includes `in_index` and `index_shard` columns.
 - `logs/run_context.json` and `logs/run_health.json` include index status and counts.
 
-If `scan.strict_index=true`, missing indexed shards will cause a non-zero exit.
-
-Pending decisions (*): strict_index behavior when the index is missing/invalid; packed_split proj canonicalization policy; file `model_path` + index expansion behavior.
+If `scan.strict_index=true`, a valid index must be present whenever index discovery is enabled.
+When index mode is active, missing indexed shards cause a non-zero exit. When `model_path` is a
+file, strict_index enforces index validity but does not expand the scan or require other shards.
 
 ## Troubleshooting
 
 - Parquet unexpectedly became CSV: check `logs/write_manifest.json` for the fallback `error`.
 - bfloat16 decode errors: install `ml-dtypes` (NumPy needs it to handle `"bfloat16"` from safetensors).
 - Packed split failures: set `parsing.strict_packed_split=false` to warn + fall back (see `logs/warnings.*`).
-- Index strictness: set `scan.strict_index=false` to warn + continue when shards are missing.
+- Index strictness: set `scan.strict_index=false` to allow missing/invalid index fallbacks. Missing indexed shards are recorded in `logs/warnings.*` and `logs/run_health.json`, and the run continues.
 - MLX missing or failing: set `mlx.enabled=false` to skip quant sims; errors and skips are recorded in `logs/warnings.*`.
 
 ## Tests

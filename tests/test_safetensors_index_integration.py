@@ -41,11 +41,14 @@ class SafetensorsIndexIntegrationTests(unittest.TestCase):
         model_dir: Path,
         use_index: bool | None,
         strict_index: bool,
+        extensions: list[str] | None = None,
     ) -> None:
+        if extensions is None:
+            extensions = [".safetensors"]
         cfg = {
             "model_path": str(model_dir),
             "scan": {
-                "extensions": [".safetensors"],
+                "extensions": extensions,
                 "experts_only": True,
                 "include_shared_expert": True,
                 "inventory_all_tensors": True,
@@ -152,6 +155,19 @@ class SafetensorsIndexIntegrationTests(unittest.TestCase):
                 set(report.get("extra_safetensors_files_on_disk", [])),
                 {"extra.safetensors"},
             )
+            context = json.loads((run_dir / "logs" / "run_context.json").read_text())
+            scan_plan = context.get("scan_plan", {})
+            self.assertEqual(scan_plan.get("scan_mode"), "index")
+            index_info = context.get("index", {})
+            self.assertEqual(index_info.get("parsed"), True)
+            self.assertEqual(index_info.get("used_for_scan"), True)
+            self.assertEqual(index_info.get("active"), True)
+
+            health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            index_summary = health.get("index_summary", {})
+            self.assertEqual(index_summary.get("parsed"), True)
+            self.assertEqual(index_summary.get("used_for_scan"), True)
+            self.assertEqual(index_summary.get("active"), True)
 
     def test_collect_data_reports_extra_tensor_in_indexed_shard(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -308,6 +324,210 @@ class SafetensorsIndexIntegrationTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["tensor_name"], t1)
 
+    def test_collect_data_strict_index_requires_active_index_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            t1 = "layers.0.experts.0.down_proj.weight"
+            arr = np.arange(4, dtype=np.float32).reshape(2, 2)
+
+            self._write_safetensors(model_dir / "weights.safetensors", {t1: arr})
+
+            run_dir = tmp_path / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, model_dir, use_index=True, strict_index=True)
+
+            result = self._run_collect(run_dir, self._env(), check=False)
+            self.assertNotEqual(result.returncode, 0)
+            output = ((result.stdout or "") + (result.stderr or "")).lower()
+            self.assertIn("strict_index", output)
+            self.assertIn("active index", output)
+
+    def test_collect_data_strict_index_requires_active_index_when_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            t1 = "layers.0.experts.0.down_proj.weight"
+            arr = np.arange(4, dtype=np.float32).reshape(2, 2)
+
+            self._write_safetensors(model_dir / "weights.safetensors", {t1: arr})
+            (model_dir / "model.safetensors.index.json").write_text(
+                json.dumps({"metadata": {"format": "pt"}}, indent=2)
+            )
+
+            run_dir = tmp_path / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, model_dir, use_index=True, strict_index=True)
+
+            result = self._run_collect(run_dir, self._env(), check=False)
+            self.assertNotEqual(result.returncode, 0)
+            output = ((result.stdout or "") + (result.stderr or "")).lower()
+            self.assertIn("strict_index", output)
+            self.assertIn("active index", output)
+
+    def test_collect_data_strict_index_requires_use_index_flag(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            t1 = "layers.0.experts.0.down_proj.weight"
+            arr = np.arange(4, dtype=np.float32).reshape(2, 2)
+
+            self._write_safetensors(model_dir / "weights.safetensors", {t1: arr})
+
+            run_dir = tmp_path / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, model_dir, use_index=False, strict_index=True)
+
+            result = self._run_collect(run_dir, self._env(), check=False)
+            self.assertNotEqual(result.returncode, 0)
+            output = ((result.stdout or "") + (result.stderr or "")).lower()
+            self.assertIn("strict_index", output)
+            self.assertIn("use_safetensors_index_json", output)
+
+    def test_collect_data_file_model_path_strict_index_requires_active_index(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            t1 = "layers.0.experts.0.down_proj.weight"
+            arr = np.arange(4, dtype=np.float32).reshape(2, 2)
+
+            shard_ok = model_dir / "shard_ok.npz"
+            np.savez(shard_ok, **{t1: arr})
+
+            run_dir = tmp_path / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                shard_ok,
+                use_index=True,
+                strict_index=True,
+                extensions=[".npz"],
+            )
+
+            result = self._run_collect(run_dir, self._env(), check=False)
+            self.assertNotEqual(result.returncode, 0)
+            output = ((result.stdout or "") + (result.stderr or "")).lower()
+            self.assertIn("strict_index", output)
+            self.assertIn("active index", output)
+
+    def test_collect_data_file_model_path_does_not_expand_index_scan(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            t1 = "layers.0.experts.0.down_proj.weight"
+            t2 = "layers.0.experts.1.down_proj.weight"
+            arr = np.arange(4, dtype=np.float32).reshape(2, 2)
+
+            shard_ok = model_dir / "shard_ok.safetensors"
+            self._write_safetensors(shard_ok, {t1: arr})
+            (model_dir / "poison.safetensors").write_bytes(b"not a safetensors file")
+
+            index_path = model_dir / "model.safetensors.index.json"
+            self._write_index(
+                index_path,
+                {t1: shard_ok.name, t2: "poison.safetensors"},
+                metadata={"format": "pt"},
+            )
+
+            run_dir = tmp_path / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                shard_ok,
+                use_index=True,
+                strict_index=True,
+            )
+
+            result = self._run_collect(run_dir, self._env(), check=False)
+            combined = (result.stdout or "") + (result.stderr or "")
+            self.assertEqual(
+                result.returncode,
+                0,
+                msg=f"collect_data failed unexpectedly:\n{combined}",
+            )
+            output = combined.lower()
+            self.assertIn("index found", output)
+            self.assertIn("model_path is a file", output)
+
+            context = json.loads((run_dir / "logs" / "run_context.json").read_text())
+            scan_plan = context.get("scan_plan", {})
+            self.assertEqual(scan_plan.get("scan_mode"), "walk")
+            self.assertEqual(scan_plan.get("scanned_files_count"), 1)
+            self.assertEqual(
+                scan_plan.get("index_discovered_but_ignored_due_to_file_model_path"),
+                True,
+            )
+            scan_example = scan_plan.get("scanned_files_example") or []
+            self.assertTrue(scan_example)
+            self.assertTrue(scan_example[0].endswith("shard_ok.safetensors"))
+            index_info = context.get("index", {})
+            self.assertEqual(index_info.get("parsed"), True)
+            self.assertEqual(index_info.get("active"), False)
+            self.assertEqual(index_info.get("used_for_scan"), False)
+
+            health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            index_summary = health.get("index_summary", {})
+            self.assertEqual(index_summary.get("parsed"), True)
+            self.assertEqual(index_summary.get("active"), False)
+            self.assertEqual(index_summary.get("used_for_scan"), False)
+
+    def test_collect_data_file_model_path_ignores_missing_index_shards_in_strict_mode(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            t1 = "layers.0.experts.0.down_proj.weight"
+            t2 = "layers.0.experts.1.down_proj.weight"
+            arr = np.arange(4, dtype=np.float32).reshape(2, 2)
+
+            shard_ok = model_dir / "shard_ok.safetensors"
+            self._write_safetensors(shard_ok, {t1: arr})
+
+            index_path = model_dir / "model.safetensors.index.json"
+            self._write_index(
+                index_path,
+                {t1: shard_ok.name, t2: "missing.safetensors"},
+                metadata={"format": "pt"},
+            )
+
+            run_dir = tmp_path / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                shard_ok,
+                use_index=True,
+                strict_index=True,
+            )
+
+            result = self._run_collect(run_dir, self._env(), check=False)
+            combined = (result.stdout or "") + (result.stderr or "")
+            self.assertEqual(
+                result.returncode,
+                0,
+                msg=f"collect_data failed unexpectedly:\n{combined}",
+            )
+            output = combined.lower()
+            self.assertIn("index found", output)
+            self.assertIn("model_path is a file", output)
+
+            context = json.loads((run_dir / "logs" / "run_context.json").read_text())
+            scan_plan = context.get("scan_plan", {})
+            self.assertEqual(scan_plan.get("scanned_files_count"), 1)
+            self.assertEqual(
+                scan_plan.get("index_discovered_but_ignored_due_to_file_model_path"),
+                True,
+            )
     def test_collect_data_without_index_flag_keeps_inventory_schema(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)

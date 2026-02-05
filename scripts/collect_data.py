@@ -795,6 +795,12 @@ def main():
     inventory_all = bool(scan_cfg.get("inventory_all_tensors", True))
     use_index = bool(scan_cfg.get("use_safetensors_index_json", True))
     strict_index = bool(scan_cfg.get("strict_index", False))
+    model_path_is_file = bool(model_path.is_file())
+    model_path_kind = "file" if model_path_is_file else "dir"
+
+    # Fail fast when strict_index is enabled but index discovery is disabled.
+    if strict_index and not use_index:
+        raise SystemExit("strict_index requires use_safetensors_index_json=true")
 
     parsing = cfg["parsing"]
     layer_re = re.compile(parsing["layer_regex"])
@@ -972,7 +978,23 @@ def main():
                         extra_safetensors_files_on_disk -= expected_shards
                 # If find_fn returned a candidate path that does not exist, keep found False.
 
-    index_ready = bool(index_active and weight_map is not None)
+    index_parsed = bool(index_active and weight_map is not None)
+
+    # Make "strict" mean "an active index must exist" when index discovery is enabled.
+    if strict_index and use_index and not index_parsed:
+        raise SystemExit(f"strict_index requires an active index (status: {index_status})")
+
+    index_used_for_scan = bool(index_parsed)
+    index_discovered_but_ignored_due_to_file_model_path = False
+    # Treat file model_path as an explicit anchor; index metadata is for reporting only.
+    if model_path_is_file and index_parsed:
+        index_used_for_scan = False
+        index_discovered_but_ignored_due_to_file_model_path = True
+        print(
+            f"[index] index found at {index_path}; "
+            "but model_path is a file; scanning only the anchor file. "
+            "Pass the directory to scan the indexed shard set."
+        )
 
     if mlx_enabled and schemes:
         if _load_mlx() is None:
@@ -988,7 +1010,7 @@ def main():
     tensors_observed = 0
     path_to_shard_id: Dict[Path, str] = {}
 
-    if index_ready:
+    if index_used_for_scan:
         path_to_shard_id = {path: shard for shard, path in expected_shard_paths.items()}
         for shard in sorted(expected_shards):
             path = expected_shard_paths[shard]
@@ -1010,12 +1032,16 @@ def main():
     scan_plan = {
         "use_safetensors_index_json": use_index,
         "strict_index": strict_index,
+        "model_path_kind": model_path_kind,
+        "index_discovered_but_ignored_due_to_file_model_path": (
+            index_discovered_but_ignored_due_to_file_model_path
+        ),
         "extensions": exts,
         "max_files": int(max_files) if max_files is not None else None,
         "experts_only": experts_only,
         "include_shared_expert": include_shared,
         "inventory_all_tensors": inventory_all,
-        "scan_mode": "index" if index_ready else "walk",
+        "scan_mode": "index" if index_used_for_scan else "walk",
         "scanned_files_count": int(len(files)),
         "scanned_files_example": [_path_for_scan_plan(p, model_path) for p in files[:3]],
     }
@@ -1027,14 +1053,14 @@ def main():
         if progress_every and (fi % progress_every == 0 or fi == 1):
             print(f"[collect] ({fi}/{len(files)}) {fpath}")
 
-        if index_ready:
+        if index_used_for_scan:
             shard_id = path_to_shard_id.get(fpath)
             if shard_id is not None:
                 scanned_shards.add(shard_id)
 
         for name, arr in _iter_tensors_from_file(fpath):
             tensors_observed += 1
-            if index_ready:
+            if index_used_for_scan:
                 observed_tensor_names.add(name)
             # inventory
             if inventory_all:
@@ -1050,7 +1076,7 @@ def main():
                     "ndim": int(arr.ndim),
                     "nbytes": nbytes
                 }
-                if index_ready:
+                if index_used_for_scan:
                     row["in_index"] = name in weight_map
                     row["index_shard"] = weight_map.get(name)
                 inventory_rows.append(row)
@@ -1240,7 +1266,7 @@ def main():
     extra_tensors: List[str] = []
     extra_on_disk: List[str] = []
 
-    if index_active and weight_map is not None:
+    if index_used_for_scan and weight_map is not None:
         expected_set = set(expected_shards)
         scanned_set = set(scanned_shards)
         missing_shards_report = sorted(expected_set - scanned_set)
@@ -1365,20 +1391,22 @@ def main():
         "warnings_rows": int(len(wl_df)),
         "wrote_unmatched_tensors": bool(dump_unmatched),
         "wrote_warnings": bool(not wl_df.empty),
-        "wrote_index_report": bool(index_ready),
+        "wrote_index_report": bool(index_used_for_scan),
     }
 
     index_summary: Dict[str, Any] = {
-        "active": bool(index_ready),
+        "active": bool(index_used_for_scan),
+        "parsed": bool(index_parsed),
+        "used_for_scan": bool(index_used_for_scan),
         "index_path": str(index_path) if index_path is not None else None,
         "strict_index": bool(strict_index),
-        "expected_shards_count": int(len(expected_shards)) if index_ready else 0,
-        "scanned_shards_count": int(len(scanned_shards)) if index_ready else 0,
-        "missing_shards_count": int(len(missing_shards_report)) if index_ready else 0,
-        "extra_scanned_shards_count": int(len(extra_scanned_shards)) if index_ready else 0,
-        "missing_tensors_count": int(len(missing_tensors)) if index_ready else 0,
-        "extra_tensors_count": int(len(extra_tensors)) if index_ready else 0,
-        "extra_safetensors_files_on_disk_count": int(len(extra_on_disk)) if index_ready else 0,
+        "expected_shards_count": int(len(expected_shards)) if index_used_for_scan else 0,
+        "scanned_shards_count": int(len(scanned_shards)) if index_used_for_scan else 0,
+        "missing_shards_count": int(len(missing_shards_report)) if index_used_for_scan else 0,
+        "extra_scanned_shards_count": int(len(extra_scanned_shards)) if index_used_for_scan else 0,
+        "missing_tensors_count": int(len(missing_tensors)) if index_used_for_scan else 0,
+        "extra_tensors_count": int(len(extra_tensors)) if index_used_for_scan else 0,
+        "extra_safetensors_files_on_disk_count": int(len(extra_on_disk)) if index_used_for_scan else 0,
     }
     if index_metadata:
         index_summary["index_metadata"] = index_metadata
@@ -1442,7 +1470,9 @@ def main():
         "status": index_status,
         "searched": bool(index_searched),
         "found": bool(index_found),
-        "active": bool(index_ready),
+        "parsed": bool(index_parsed),
+        "active": bool(index_used_for_scan),
+        "used_for_scan": bool(index_used_for_scan),
         "index_path": str(index_context_path) if index_context_path is not None else None,
     }
     if index_error:
