@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -45,7 +46,23 @@ class PackedSplitStrictnessTests(unittest.TestCase):
             text=True,
         )
 
-    def _write_config(self, run_dir: Path, model_dir: Path, strict_packed_split: bool) -> None:
+    def _write_config(
+        self,
+        run_dir: Path,
+        model_dir: Path,
+        strict_packed_split: bool,
+        proj_aliases: dict[str, list[str]] | None = None,
+        packed_split_projs: list[str] | None = None,
+    ) -> None:
+        if proj_aliases is None:
+            proj_aliases = {
+                "down_proj": ["down_proj"],
+                "gate_proj": ["gate_proj"],
+                "up_proj": ["up_proj"],
+            }
+        if packed_split_projs is None:
+            packed_split_projs = ["gate_proj", "down_proj"]
+
         cfg = {
             "model_path": str(model_dir),
             "scan": {
@@ -58,11 +75,7 @@ class PackedSplitStrictnessTests(unittest.TestCase):
             "parsing": {
                 "layer_regex": r"(?:^|\.)layers\.(\d+)(?:\.|$)",
                 "expert_regex": r"(?:^|\.)experts\.(\d+)(?:\.|$)",
-                "proj_aliases": {
-                    "down_proj": ["down_proj"],
-                    "gate_proj": ["gate_proj"],
-                    "up_proj": ["up_proj"],
-                },
+                "proj_aliases": proj_aliases,
                 "shared_expert_keywords": ["shared", "expert"],
                 "strict_packed_split": strict_packed_split,
             },
@@ -75,7 +88,7 @@ class PackedSplitStrictnessTests(unittest.TestCase):
                     "packed_split": {
                         "axis": "rows",
                         "splits": [3, 3],
-                        "projs": ["gate_proj", "down_proj"],
+                        "projs": packed_split_projs,
                     },
                 }
             ],
@@ -99,6 +112,8 @@ class PackedSplitStrictnessTests(unittest.TestCase):
         tmp_path: Path,
         strict_packed_split: bool,
         arr: np.ndarray = None,
+        proj_aliases: dict[str, list[str]] | None = None,
+        packed_split_projs: list[str] | None = None,
     ) -> tuple[Path, dict]:
         model_dir = tmp_path / "model"
         model_dir.mkdir(parents=True, exist_ok=True)
@@ -112,7 +127,13 @@ class PackedSplitStrictnessTests(unittest.TestCase):
 
         run_dir = tmp_path / "run"
         run_dir.mkdir(parents=True, exist_ok=True)
-        self._write_config(run_dir, model_dir, strict_packed_split)
+        self._write_config(
+            run_dir,
+            model_dir,
+            strict_packed_split,
+            proj_aliases=proj_aliases,
+            packed_split_projs=packed_split_projs,
+        )
 
         stub_root = self._create_stub_mlx(tmp_path)
         env = os.environ.copy()
@@ -176,6 +197,105 @@ class PackedSplitStrictnessTests(unittest.TestCase):
             if warnings_path.exists():
                 warnings_text = warnings_path.read_text()
                 self.assertNotIn("packed_split failed", warnings_text)
+
+    def test_packed_split_projs_are_canonicalized_via_proj_aliases(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            arr = np.arange(2 * 6 * 4, dtype=np.float32).reshape(2, 6, 4)
+            proj_aliases = {
+                "down_proj": ["down_proj", "w2"],
+                "gate_proj": ["gate_proj", "w1"],
+                "up_proj": ["up_proj", "w3"],
+            }
+            run_dir, env = self._setup_run(
+                Path(tmp_dir),
+                strict_packed_split=True,
+                arr=arr,
+                proj_aliases=proj_aliases,
+                packed_split_projs=["w1", "w2"],
+            )
+            self._run_collect(run_dir, env, check=True)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            split_rows = [
+                row
+                for row in rows
+                if row.get("source_tensor") == "layers.0.experts.0.gate_proj.weight"
+                and "::split[rows]::" in row.get("derived_tensor", "")
+            ]
+            self.assertEqual(len(split_rows), 4)
+            self.assertEqual({row["proj"] for row in split_rows}, {"gate_proj", "down_proj"})
+            self.assertFalse(any(row["proj"] in {"w1", "w2"} for row in split_rows))
+            self.assertEqual(
+                Counter(row["proj"] for row in split_rows),
+                Counter({"gate_proj": 2, "down_proj": 2}),
+            )
+            for row in split_rows:
+                self.assertEqual(int(row["rows"]), 3)
+                self.assertEqual(int(row["cols"]), 4)
+            derived_suffixes = [
+                row["derived_tensor"].split("::split[rows]::", 1)[1]
+                for row in split_rows
+            ]
+            self.assertEqual(set(derived_suffixes), {"gate_proj", "down_proj"})
+            self.assertEqual(
+                Counter(derived_suffixes),
+                Counter({"gate_proj": 2, "down_proj": 2}),
+            )
+            self.assertFalse(
+                any(
+                    "::split[rows]::w1" in row["derived_tensor"]
+                    or "::split[rows]::w2" in row["derived_tensor"]
+                    for row in split_rows
+                )
+            )
+
+    def test_packed_split_canonical_keys_are_case_normalized(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            arr = np.arange(2 * 6 * 4, dtype=np.float32).reshape(2, 6, 4)
+            proj_aliases = {
+                "down_proj": ["down_proj", "w2"],
+                "gate_proj": ["gate_proj", "w1"],
+                "up_proj": ["up_proj", "w3"],
+            }
+            run_dir, env = self._setup_run(
+                Path(tmp_dir),
+                strict_packed_split=True,
+                arr=arr,
+                proj_aliases=proj_aliases,
+                packed_split_projs=["GATE_PROJ", "Down_Proj"],
+            )
+            self._run_collect(run_dir, env, check=True)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            split_rows = [
+                row
+                for row in rows
+                if row.get("source_tensor") == "layers.0.experts.0.gate_proj.weight"
+                and "::split[rows]::" in row.get("derived_tensor", "")
+            ]
+            self.assertEqual(len(split_rows), 4)
+            self.assertEqual({row["proj"] for row in split_rows}, {"gate_proj", "down_proj"})
+            self.assertEqual(
+                Counter(row["proj"] for row in split_rows),
+                Counter({"gate_proj": 2, "down_proj": 2}),
+            )
+            derived_suffixes = [
+                row["derived_tensor"].split("::split[rows]::", 1)[1]
+                for row in split_rows
+            ]
+            self.assertEqual(set(derived_suffixes), {"gate_proj", "down_proj"})
+            self.assertEqual(
+                Counter(derived_suffixes),
+                Counter({"gate_proj": 2, "down_proj": 2}),
+            )
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ them as final contracts. This section summarizes the open decisions so readers g
 up front, and the `*` markers below point to the exact spots they affect.
 
 Pending decisions (*):
-- Whether `packed_split.projs` values must be canonicalized via `proj_aliases`, and how strict to be.
+- For `packed_split.projs` tokens that do not map via `proj_aliases`, whether to keep raw values (permissive) or fail under stricter policy.
 
 ## Quickstart
 
@@ -179,8 +179,9 @@ Why this adds complexity / how to think about it:
   which will skew per-proj aggregates. Use `parsing.strict_packed_split=true` while developing
   rules; when set to `false` the run continues but records `packed_split failed ...` warnings in
   `logs/warnings.*`.
-- `packed_split.projs` are currently treated as literal strings*, so prefer canonical proj names
-  in that list to avoid fragmenting tables by `proj`.
+- `packed_split.projs` are canonicalized via `parsing.proj_aliases` using the same inference gate
+  as other proj paths (known aliases map to canonical names; unknown tokens are kept raw and may
+  still fragment tables by `proj`).
 
 Practical sanity checks when you add/modify rules:
 

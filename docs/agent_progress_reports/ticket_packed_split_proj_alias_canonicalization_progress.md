@@ -1,0 +1,23 @@
+# Ticket: packed_split_proj_alias_canonicalization — Progress
+
+- [2026-02-06] Goal: Add fail-first coverage proving packed_split `projs` are canonicalized through `parsing.proj_aliases` so downstream `proj`/`derived_tensor` values do not fragment by alias tokens.
+- [2026-02-06] Plan: Extend `tests/test_packed_split_strictness.py` with a deterministic subprocess acceptance test using `projs=["w1","w2"]` and alias mapping to `gate_proj`/`down_proj`; assert canonical outputs in `matrix_stats.csv` and raw aliases absent.
+- [2026-02-06] Changes made: Updated `tests/test_packed_split_strictness.py` helpers to allow custom `proj_aliases` and `packed_split.projs`, and added `test_packed_split_projs_are_canonicalized_via_proj_aliases` that runs `collect_data.py` end-to-end on a tiny deterministic fused tensor.
+- [2026-02-06] Non-vacuous test signal: asserts concrete `matrix_stats.csv` semantics (`proj` set and `derived_tensor` suffixes) so it fails if aliases are left raw, even when extraction succeeds.
+- [2026-02-06] Command run: `uv run python -m unittest tests.test_packed_split_strictness.PackedSplitStrictnessTests.test_packed_split_projs_are_canonicalized_via_proj_aliases` -> FAIL as expected pre-fix.
+- [2026-02-06] Key failure excerpt: `AssertionError: Items in the first set but not the second: 'w2' 'w1' ... second set missing 'gate_proj' 'down_proj'`.
+- [2026-02-06] Assumption: unknown packed_split tokens should remain raw in this ticket; this test intentionally constrains only known aliases to canonical names.
+- [2026-02-06] Test hardening update (user feedback): tightened canonicalization test to assert exact split row count (`E=2` x `splits=2` => `4` rows), split geometry (`rows=3`, `cols=4`), and scoped split rows to the known `source_tensor` to avoid accidental cross-tensor matches.
+- [2026-02-06] Re-ran command: `uv run python -m unittest tests.test_packed_split_strictness.PackedSplitStrictnessTests.test_packed_split_projs_are_canonicalized_via_proj_aliases` -> still FAIL pre-fix for intended reason (`proj` remains `w1/w2` instead of canonical names).
+- [2026-02-06] Test hardening update (user feedback #2): added per-proj multiplicity assertions using `Counter` so split rows must contain exactly two `gate_proj` and two `down_proj` rows (one per expert), and mirrored this count check for `derived_tensor` split suffixes.
+- [2026-02-06] Command run: `uv run python -m unittest tests.test_packed_split_strictness.PackedSplitStrictnessTests.test_packed_split_projs_are_canonicalized_via_proj_aliases` -> FAIL expected pre-fix; first failing assertion still shows raw `w1/w2` proj labels.
+- [2026-02-06] Refinement pass: adjusted packed-split proj resolution logic to avoid redundant alias inference when `raw_proj` already matches a canonical key case-insensitively; canonical key map is now built only when `alias_map` is non-empty.
+- [2026-02-06] README polish: replaced stale pending-decision bullet (canonicalization itself) with the remaining decision (policy for unknown packed-split tokens), and clarified that unknown raw tokens may still fragment `proj` aggregates.
+- [2026-02-06] Commands run:
+  - `./.venv/bin/python -m unittest tests.test_packed_split_strictness` -> PASS (4 tests)
+  - `./.venv/bin/python -m unittest tests.test_proj_group_normalization` -> PASS (7 tests)
+- [2026-02-06] Optional hardening: added `test_packed_split_canonical_keys_are_case_normalized` to lock in case-insensitive normalization of canonical packed-split tokens (e.g., `GATE_PROJ`, `Down_Proj`) to canonical output labels.
+- [2026-02-06] Rationale: prevents regressions where canonical key normalization is accidentally removed while alias inference still passes other paths.
+- [2026-02-06] Commands run:
+  - `./.venv/bin/python -m unittest tests.test_packed_split_strictness.PackedSplitStrictnessTests.test_packed_split_canonical_keys_are_case_normalized` -> PASS
+  - `./.venv/bin/python -m unittest tests.test_packed_split_strictness` -> PASS (5 tests)

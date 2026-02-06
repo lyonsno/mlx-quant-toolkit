@@ -470,14 +470,28 @@ def _apply_rules(
             msg = f"packed_split projs and splits length mismatch for rule={r.name} tensor={name}"
             raise PackedSplitError(msg)
 
+        canonical_keys_by_lower: Dict[str, str] = {}
+        if alias_map:
+            canonical_keys_by_lower = {k.lower(): k for k in alias_map.keys()}
+
         banks: List[ExtractedBank] = []
-        for proj, part in zip(proj_list, parts):
-            derived = f"{name}::split[{axis_kind}]::{proj}"
+        for raw_proj, part in zip(proj_list, parts):
+            if not alias_map:
+                resolved_proj = raw_proj
+            else:
+                # Normalize explicit canonical keys case-insensitively before alias inference.
+                raw_proj_lower = raw_proj.lower()
+                if raw_proj_lower in canonical_keys_by_lower:
+                    resolved_proj = canonical_keys_by_lower[raw_proj_lower]
+                else:
+                    resolved_proj = _infer_proj(raw_proj, alias_map) or raw_proj
+
+            derived = f"{name}::split[{axis_kind}]::{resolved_proj}"
             banks.append(ExtractedBank(
                 source_file=str(fpath),
                 source_tensor=name,
                 derived_tensor=derived,
-                proj=proj,
+                proj=resolved_proj,
                 is_shared_expert=is_shared,
                 layer_base=layer_base,
                 expert_single_id=expert_single_id,

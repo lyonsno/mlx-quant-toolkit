@@ -1,19 +1,17 @@
 Remaining Identified Issues
 
-- `scripts/collect_data.py`: `packed_split.projs` values are not canonicalized through `parsing.proj_aliases` (e.g., ["w1","w2"] stays raw), which can silently fragment aggregates by `proj`.
 - Hard errors are inconsistently surfaced (SystemExit vs tracebacks) and usually produce no structured failure artifacts. See `future_work/error_logging_and_hard_error_consistency.md`.
 
 Planned Changes
 
-- Canonicalize `packed_split.projs` via the same alias inference path used elsewhere:
-  - map known aliases -> canonical (`w1` -> `gate_proj`, etc.)
-  - when unknown: either warn + keep raw, or treat as strict failure (policy decision below).
+- Harden hard-error surfacing to be consistent and produce structured failure artifacts.
 
 Open Questions
 
 - For `packed_split.projs` that don’t map to a canonical proj: should we (a) keep raw with a warning (permissive), or (b) drop/fail under strict mode to prevent fragmentation?
 
 Recently Resolved (doc drift cleanup)
+- `packed_split.projs` values are canonicalized through `parsing.proj_aliases` for packed splits, so known aliases (e.g., `w1`/`w2`) now emit canonical `proj`/`derived_tensor` labels.
 - Add context manager around opening .npz files
 - Add `logs/run_health.json` summarizing: files scanned, tensors observed, extracted-by-rule vs fallback counts, unmatched count, and (if index-active) missing/extra shard/tensor counts.
 - Add run-level visibility for fallback usage (via `logs/run_health.json` counts for rule vs fallback extraction).
