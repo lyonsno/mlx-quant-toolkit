@@ -21,3 +21,4 @@
 - [2026-02-06] Commands run:
   - `./.venv/bin/python -m unittest tests.test_packed_split_strictness.PackedSplitStrictnessTests.test_packed_split_canonical_keys_are_case_normalized` -> PASS
   - `./.venv/bin/python -m unittest tests.test_packed_split_strictness` -> PASS (5 tests)
+- [2026-02-06] Commit hash: `9dd6c7d` (`Canonicalize packed_split projs via proj_aliases`).
