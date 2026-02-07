@@ -45,3 +45,6 @@ runs/
 .env
 .env.*
 .envrc
+
+# agent environments
+.codex/
