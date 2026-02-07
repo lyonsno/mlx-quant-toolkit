@@ -1,14 +1,19 @@
 Remaining Identified Issues
 
 - Hard errors are inconsistently surfaced (SystemExit vs tracebacks) and usually produce no structured failure artifacts. See `future_work/error_logging_and_hard_error_consistency.md`.
+- "Optional" deps are not actually optional yet according to `pyproject.toml`.
 
 Planned Changes
 
 - Harden hard-error surfacing to be consistent and produce structured failure artifacts.
+- Add CLI entry point to `main.py` and remove placeholder.
+- Add license file.
+- Modify `pyproject.toml` to canonicalize optional deps.
 
 Open Questions
 
 - For `packed_split.projs` that don’t map to a canonical proj: should we (a) keep raw with a warning (permissive), or (b) drop/fail under strict mode to prevent fragmentation?
+- We need to pick a license.
 
 Recently Resolved (doc drift cleanup)
 - `packed_split.projs` values are canonicalized through `parsing.proj_aliases` for packed splits, so known aliases (e.g., `w1`/`w2`) now emit canonical `proj`/`derived_tensor` labels.
