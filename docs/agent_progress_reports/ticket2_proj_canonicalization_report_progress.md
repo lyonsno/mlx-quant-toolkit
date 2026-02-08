@@ -133,3 +133,4 @@
   - added `self.assertIn("unmatched_tensors", artifacts)` before interpolating `artifacts["unmatched_tensors"]["path"]` in strict empty-alias warning test, so missing-key failures are explicit assertions instead of `KeyError`.
   - softened defensive config warning branch text to include optional context: `(this can happen if nothing was eligible to dump)`.
 - [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_with_empty_alias_map_sets_config_reason_and_warning tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_with_empty_alias_map_and_unmatched_dump_disabled_warns_how_to_enable` -> PASS (`Ran 2 tests in 0.827s`).
+- [2026-02-08] Commit hash: `70e414e` (`Refine strict proj_group drop signaling and warnings`).
