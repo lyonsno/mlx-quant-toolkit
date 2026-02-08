@@ -91,3 +91,45 @@
 - [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_unmatched_when_alias_missing tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_strict_proj_group_drops_have_separate_warning_and_do_not_change_kept_raw_counts` -> PASS (`Ran 2 tests in 0.931s`).
 - [2026-02-07] Command run: `uv run python -m unittest tests.test_packed_split_strictness tests.test_proj_group_normalization` -> PASS (`Ran 19 tests in 3.039s`).
 - [2026-02-07] Command run: `uv run python -m unittest tests.test_run_health_json_integration tests.test_auditability_artifacts_integration` -> PASS (`Ran 6 tests in 1.877s`).
+- [2026-02-07] Commit hash: `38ab0f7` (`Surface strict proj_group drops in unmatched reasons`).
+- [2026-02-07] Follow-up tests-first pass (coherence + docs addendum prep): added `test_proj_group_strict_with_empty_alias_map_keeps_default_unmatched_reason_and_no_proj_report` in `tests/test_proj_group_normalization.py` to lock expected coherence when `proj_aliases` is empty in strict proj_group mode.
+- [2026-02-07] New test intent: strict empty-alias path should not create strict proj side-channel semantics; unmatched reason should remain default (`no_rule_match_or_proj_infer`) and no proj report/warnings artifacts should be emitted.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_unmatched_when_alias_missing tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_with_empty_alias_map_keeps_default_unmatched_reason_and_no_proj_report tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_strict_proj_group_drops_have_separate_warning_and_do_not_change_kept_raw_counts` -> FAIL as expected pre-fix.
+- [2026-02-07] Key failure excerpt: `AssertionError: 'proj_group_strict_unmapped' != 'no_rule_match_or_proj_infer'`.
+- [2026-02-07] Policy refinement tests-first update: adopted distinct strict-failure semantics for empty alias universe.
+- [2026-02-07] Test change: replaced prior empty-alias strict test with `test_proj_group_strict_with_empty_alias_map_sets_config_reason_and_warning` in `tests/test_proj_group_normalization.py`.
+  - Fixture includes two strict-dropped tensors so config warning must aggregate `occurrences=2`.
+  - Expects unmatched reason `proj_group_strict_no_alias_map` for each tensor.
+  - Expects exactly one `[config] parsing.proj_group_strict=true but parsing.proj_aliases is empty; strict proj_group drops occurred (occurrences=2). See unmatched_tensors.* for details.` warning line.
+  - Expects no `proj_canonicalization_report` artifact and no `[proj]` kept-raw/strict warning lines.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_unmatched_when_alias_missing tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_with_empty_alias_map_sets_config_reason_and_warning tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_strict_proj_group_drops_have_separate_warning_and_do_not_change_kept_raw_counts` -> FAIL as expected pre-fix.
+- [2026-02-07] Key failure excerpt: `AssertionError: 'proj_group_strict_unmapped' != 'proj_group_strict_no_alias_map'`.
+- [2026-02-07] Implementation follow-up (strict no-alias policy split): in `_apply_rules(...)` strict proj_group drops now set side-channel reason based on context:
+  - `proj_group_strict_unmapped` when alias universe exists and token is unmapped,
+  - `proj_group_strict_no_alias_map` when strict mode is enabled but `proj_aliases` is empty.
+- [2026-02-07] Fallback is skipped for both strict-drop cases via existing `skip_fallback` side-channel, preserving strict semantics.
+- [2026-02-07] Added run-level config warning aggregation for no-alias strict drops:
+  `[config] parsing.proj_group_strict=true but parsing.proj_aliases is empty; strict proj_group drops occurred (occurrences=N). See unmatched_tensors.* for details.`
+- [2026-02-07] README update: documented unmatched reason values `proj_group_strict_unmapped` and `proj_group_strict_no_alias_map` under `data/unmatched_tensors.*` schema notes.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_unmatched_when_alias_missing tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_with_empty_alias_map_sets_config_reason_and_warning tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_strict_proj_group_drops_have_separate_warning_and_do_not_change_kept_raw_counts` -> PASS (`Ran 3 tests in 1.038s`).
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_packed_split_strictness tests.test_proj_group_normalization` -> PASS (`Ran 20 tests in 3.147s`).
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_run_health_json_integration tests.test_auditability_artifacts_integration` -> PASS (`Ran 6 tests in 1.742s`).
+- [2026-02-07] Warning-text refinement (user request): config warning for strict no-alias drops now branches on `debug.dump_unmatched_tensors`.
+  - when true: `... See unmatched_tensors.* for details.`
+  - when false: `... Enable debug.dump_unmatched_tensors=true to write unmatched_tensors.*.`
+- [2026-02-07] Tests added/updated: `tests/test_proj_group_normalization.py` now includes `test_proj_group_strict_with_empty_alias_map_and_unmatched_dump_disabled_warns_how_to_enable`, and helper setup supports `dump_unmatched_tensors` override.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_with_empty_alias_map_sets_config_reason_and_warning tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_with_empty_alias_map_and_unmatched_dump_disabled_warns_how_to_enable` -> PASS (`Ran 2 tests in 0.461s`).
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_packed_split_strictness tests.test_proj_group_normalization` -> PASS (`Ran 21 tests in 2.998s`).
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_run_health_json_integration tests.test_auditability_artifacts_integration` -> PASS (`Ran 6 tests in 1.419s`).
+- [2026-02-07] Warning-truthfulness refinement (user request): strict no-alias config warning now branches on actual outputs via `artifacts`.
+  - if `"unmatched_tensors" in artifacts`: warning uses exact manifest path (`See {artifacts['unmatched_tensors']['path']} for details.`)
+  - elif `dump_unmatched_tensors` is false: warning suggests enabling dump (`Enable debug.dump_unmatched_tensors=true ...`)
+  - else: warning reports missing artifact and points to `logs/write_manifest.json`.
+- [2026-02-07] Test alignment: updated `test_proj_group_strict_with_empty_alias_map_sets_config_reason_and_warning` to expect exact unmatched artifact path from manifest in warning text.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_with_empty_alias_map_sets_config_reason_and_warning tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_with_empty_alias_map_and_unmatched_dump_disabled_warns_how_to_enable` -> PASS (`Ran 2 tests in 0.919s`).
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_packed_split_strictness tests.test_proj_group_normalization` -> PASS (`Ran 21 tests in 3.567s`).
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_run_health_json_integration tests.test_auditability_artifacts_integration` -> PASS (`Ran 6 tests in 1.853s`).
+- [2026-02-07] UX/test nits cleanup:
+  - added `self.assertIn("unmatched_tensors", artifacts)` before interpolating `artifacts["unmatched_tensors"]["path"]` in strict empty-alias warning test, so missing-key failures are explicit assertions instead of `KeyError`.
+  - softened defensive config warning branch text to include optional context: `(this can happen if nothing was eligible to dump)`.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_with_empty_alias_map_sets_config_reason_and_warning tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_with_empty_alias_map_and_unmatched_dump_disabled_warns_how_to_enable` -> PASS (`Ran 2 tests in 0.827s`).

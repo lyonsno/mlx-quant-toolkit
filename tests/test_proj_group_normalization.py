@@ -191,6 +191,7 @@ class ProjGroupNormalizationIntegrationTests(unittest.TestCase):
         proj_aliases: dict[str, list[str]],
         proj_group_strict: bool,
         rules: list[dict] | None = None,
+        dump_unmatched_tensors: bool = True,
     ) -> None:
         if rules is None:
             rules = [rule]
@@ -223,7 +224,10 @@ class ProjGroupNormalizationIntegrationTests(unittest.TestCase):
             },
             "quant_schemes": [],
             "output": {"format": "csv", "compression": None},
-            "debug": {"dump_unmatched_tensors": True, "print_progress_every_files": 0},
+            "debug": {
+                "dump_unmatched_tensors": dump_unmatched_tensors,
+                "print_progress_every_files": 0,
+            },
         }
         (run_dir / "analysis_config.json").write_text(json.dumps(cfg, indent=2))
 
@@ -250,6 +254,7 @@ class ProjGroupNormalizationIntegrationTests(unittest.TestCase):
         proj_aliases: dict[str, list[str]],
         proj_group_strict: bool,
         rules: list[dict] | None = None,
+        dump_unmatched_tensors: bool = True,
     ) -> tuple[Path, dict]:
         model_dir = tmp_path / "model"
         model_dir.mkdir(parents=True, exist_ok=True)
@@ -264,6 +269,7 @@ class ProjGroupNormalizationIntegrationTests(unittest.TestCase):
             proj_aliases,
             proj_group_strict,
             rules=rules,
+            dump_unmatched_tensors=dump_unmatched_tensors,
         )
 
         stub_root = self._create_stub_mlx(tmp_path)
@@ -434,6 +440,173 @@ class ProjGroupNormalizationIntegrationTests(unittest.TestCase):
             self.assertEqual(len(strict_warnings), 1)
             self.assertEqual(strict_warnings[0], expected_strict_warning)
             self.assertEqual(len(kept_raw_warnings), 0)
+
+    def test_proj_group_strict_with_empty_alias_map_sets_config_reason_and_warning(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            arr = np.arange(8, dtype=np.float32).reshape(2, 2, 2)
+            tensor_names = [
+                "layers.0.experts.0.w1.w999.weight",
+                "layers.0.experts.1.w1.w998.weight",
+            ]
+            tensors = {name: arr for name in tensor_names}
+            rule = {
+                "name": "proj_group_w998_w999",
+                "match": r".*experts.*\.(w998|w999)\.weight$",
+                "ndim": 3,
+                "layout": {
+                    "layer_axis": None,
+                    "expert_axis": 0,
+                    "rows_axis": 1,
+                    "cols_axis": 2,
+                },
+                "proj_group": 1,
+            }
+            run_dir, env = self._setup_run(
+                tmp_path,
+                tensors,
+                rule,
+                proj_aliases={},
+                proj_group_strict=True,
+            )
+            self._run_collect(run_dir, env)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 0)
+
+            unmatched_path = run_dir / "data" / "unmatched_tensors.csv"
+            self.assertTrue(unmatched_path.exists())
+            with unmatched_path.open(newline="") as handle:
+                unmatched_rows = list(csv.DictReader(handle))
+            for tensor_name in tensor_names:
+                match = next(
+                    (row for row in unmatched_rows if row["tensor_name"] == tensor_name),
+                    None,
+                )
+                self.assertIsNotNone(match)
+                self.assertEqual(match["reason"], "proj_group_strict_no_alias_map")
+
+            write_manifest = json.loads((run_dir / "logs" / "write_manifest.json").read_text())
+            artifacts = write_manifest.get("artifacts", {})
+            self.assertIn("warnings", artifacts)
+            self.assertNotIn("proj_canonicalization_report", artifacts)
+
+            warnings_meta = artifacts["warnings"]
+            warnings_rel_path = Path(warnings_meta["path"])
+            self.assertIn("logs", warnings_rel_path.parts)
+            self.assertTrue(warnings_rel_path.name.startswith("warnings"))
+            warnings_path = (
+                warnings_rel_path
+                if warnings_rel_path.is_absolute()
+                else run_dir / warnings_rel_path
+            )
+            self.assertTrue(warnings_path.exists())
+            with warnings_path.open(newline="") as handle:
+                warning_rows = list(csv.DictReader(handle))
+
+            self.assertIn("unmatched_tensors", artifacts)
+            config_warnings = [
+                row.get("warning", "")
+                for row in warning_rows
+                if row.get("warning", "").startswith(
+                    "[config] parsing.proj_group_strict=true but parsing.proj_aliases is empty;"
+                )
+            ]
+            kept_raw_warnings = [
+                row.get("warning", "")
+                for row in warning_rows
+                if "[proj] unmapped proj tokens kept raw" in row.get("warning", "")
+            ]
+            strict_warnings = [
+                row.get("warning", "")
+                for row in warning_rows
+                if row.get("warning", "").startswith(
+                    "[proj] strict proj_group dropped tensors due to unmapped proj tokens:"
+                )
+            ]
+            expected_config_warning = (
+                "[config] parsing.proj_group_strict=true but parsing.proj_aliases is empty; "
+                "strict proj_group drops occurred (occurrences=2). "
+                f"See {artifacts['unmatched_tensors']['path']} for details."
+            )
+            self.assertEqual(len(config_warnings), 1)
+            self.assertEqual(config_warnings[0], expected_config_warning)
+            self.assertEqual(len(kept_raw_warnings), 0)
+            self.assertEqual(len(strict_warnings), 0)
+
+    def test_proj_group_strict_with_empty_alias_map_and_unmatched_dump_disabled_warns_how_to_enable(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            arr = np.arange(8, dtype=np.float32).reshape(2, 2, 2)
+            tensor_names = [
+                "layers.0.experts.0.w1.w999.weight",
+                "layers.0.experts.1.w1.w998.weight",
+            ]
+            tensors = {name: arr for name in tensor_names}
+            rule = {
+                "name": "proj_group_w998_w999",
+                "match": r".*experts.*\.(w998|w999)\.weight$",
+                "ndim": 3,
+                "layout": {
+                    "layer_axis": None,
+                    "expert_axis": 0,
+                    "rows_axis": 1,
+                    "cols_axis": 2,
+                },
+                "proj_group": 1,
+            }
+            run_dir, env = self._setup_run(
+                tmp_path,
+                tensors,
+                rule,
+                proj_aliases={},
+                proj_group_strict=True,
+                dump_unmatched_tensors=False,
+            )
+            self._run_collect(run_dir, env)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 0)
+
+            write_manifest = json.loads((run_dir / "logs" / "write_manifest.json").read_text())
+            artifacts = write_manifest.get("artifacts", {})
+            self.assertIn("warnings", artifacts)
+            self.assertNotIn("proj_canonicalization_report", artifacts)
+            self.assertNotIn("unmatched_tensors", artifacts)
+
+            warnings_meta = artifacts["warnings"]
+            warnings_rel_path = Path(warnings_meta["path"])
+            self.assertIn("logs", warnings_rel_path.parts)
+            self.assertTrue(warnings_rel_path.name.startswith("warnings"))
+            warnings_path = (
+                warnings_rel_path
+                if warnings_rel_path.is_absolute()
+                else run_dir / warnings_rel_path
+            )
+            self.assertTrue(warnings_path.exists())
+            with warnings_path.open(newline="") as handle:
+                warning_rows = list(csv.DictReader(handle))
+
+            config_warnings = [
+                row.get("warning", "")
+                for row in warning_rows
+                if row.get("warning", "").startswith(
+                    "[config] parsing.proj_group_strict=true but parsing.proj_aliases is empty;"
+                )
+            ]
+            expected_config_warning = (
+                "[config] parsing.proj_group_strict=true but parsing.proj_aliases is empty; "
+                "strict proj_group drops occurred (occurrences=2). "
+                "Enable debug.dump_unmatched_tensors=true to write unmatched_tensors.*."
+            )
+            self.assertEqual(len(config_warnings), 1)
+            self.assertEqual(config_warnings[0], expected_config_warning)
 
     def test_proj_group_non_strict_unmapped_token_writes_report_and_warning(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

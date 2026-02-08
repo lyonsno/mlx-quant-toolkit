@@ -288,7 +288,7 @@ Contract-writing blocks in code are tagged with short `CONTRACT SURFACE:` marker
   - `action` (`kept_raw` or `dropped_strict`)
   - `raw_proj`, `resolved_proj`, `count`, example fields, and suggestion fields
 - `logs/warnings.*` includes at most one kept-raw proj summary line and (when applicable) one
-  strict-drop proj summary line, both pointing to the report path from `write_manifest`:
+  strict-drop proj summary line, both pointing to the report path from `write_manifest`, in addition to other warnings:
   - kept raw: `[proj] unmapped proj tokens kept raw: packed_split={...}, proj_group={...} (unique={...}, occurrences={...}). See {report_path}`
   - strict drop: `[proj] strict proj_group dropped tensors due to unmapped proj tokens: occurrences={...} (unique={...}). See {report_path}`
 - `logs/run_health.json` records:
@@ -313,6 +313,11 @@ Contract-writing blocks in code are tagged with short `CONTRACT SURFACE:` marker
   - key columns: `file`, `source_tensor`, `derived_tensor`, `layer`, `block4`, `proj`, `expert_id`,
     `is_shared_expert`, `scheme`, `mode`, `bits`, `group_size`, `w_rel_fro`, `w_rel_max`, `scale_*`, `bias_*`, `error`
   - if a scheme fails, rows are still emitted with `error` populated (so you can see coverage)
+- `data/unmatched_tensors.*` (optional; requires `debug.dump_unmatched_tensors=true`):
+  - key columns include `file`, `tensor_name`, `dtype`, `shape`, `ndim`, `reason`
+  - strict proj-group reasons:
+    - `proj_group_strict_unmapped`: alias universe exists, but captured `proj_group` token was unmapped and strict mode dropped it
+    - `proj_group_strict_no_alias_map`: `parsing.proj_group_strict=true` while `parsing.proj_aliases` is empty; strict mode dropped it
 
 ## Safetensors index support (`model.safetensors.index.json`)
 

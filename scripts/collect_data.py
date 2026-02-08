@@ -518,10 +518,13 @@ def _apply_rules(
                     unmapped = bool(alias_map) and (not is_canonical_key) and (inferred is None)
                     if proj_group_strict:
                         key = (str(fpath), name)
-                        if unmatched_reason_override is not None:
-                            unmatched_reason_override[key] = "proj_group_strict_unmapped"
                         if skip_fallback is not None:
                             skip_fallback.add(key)
+                        if unmatched_reason_override is not None:
+                            if unmapped:
+                                unmatched_reason_override[key] = "proj_group_strict_unmapped"
+                            else:
+                                unmatched_reason_override[key] = "proj_group_strict_no_alias_map"
                         if unmapped and proj_issue_acc is not None:
                             suggested_proj, suggested_match = _suggest_proj(raw, alias_map)
                             _record_proj_issue(
@@ -1576,6 +1579,34 @@ def main():
                 f"occurrences={dropped_occurrences} "
                 f"(unique={dropped_unique}). "
                 f"See {report_meta['path']}"
+            )
+
+    strict_no_alias_occurrences = sum(
+        1
+        for reason in unmatched_reason_override.values()
+        if reason == "proj_group_strict_no_alias_map"
+    )
+    if strict_no_alias_occurrences > 0:
+        if "unmatched_tensors" in artifacts:
+            unmatched_meta = artifacts.get("unmatched_tensors", {})
+            unmatched_path = str(unmatched_meta.get("path") or "unmatched_tensors.*")
+            warn_log.append(
+                "[config] parsing.proj_group_strict=true but parsing.proj_aliases is empty; "
+                f"strict proj_group drops occurred (occurrences={strict_no_alias_occurrences}). "
+                f"See {unmatched_path} for details."
+            )
+        elif not dump_unmatched:
+            warn_log.append(
+                "[config] parsing.proj_group_strict=true but parsing.proj_aliases is empty; "
+                f"strict proj_group drops occurred (occurrences={strict_no_alias_occurrences}). "
+                "Enable debug.dump_unmatched_tensors=true to write unmatched_tensors.*."
+            )
+        else:
+            warn_log.append(
+                "[config] parsing.proj_group_strict=true but parsing.proj_aliases is empty; "
+                f"strict proj_group drops occurred (occurrences={strict_no_alias_occurrences}). "
+                "unmatched_tensors.* was not written in this run (this can happen if nothing was eligible to dump); "
+                "check logs/write_manifest.json."
             )
 
     wl_df = pd.DataFrame({"warning": warn_log}) if warn_log else pd.DataFrame()
