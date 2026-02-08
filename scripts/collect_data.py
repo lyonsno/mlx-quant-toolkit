@@ -12,6 +12,7 @@ Override model path if you want:
 from __future__ import annotations
 
 import argparse
+import difflib
 import importlib.util
 import json
 import os
@@ -21,7 +22,7 @@ import warnings
 from dataclasses import dataclass
 from numbers import Integral
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -309,6 +310,85 @@ def _infer_proj(name: str, alias_map: Dict[str, List[str]]) -> Optional[str]:
     return None
 
 
+def _suggest_proj(raw_proj: str, alias_map: Dict[str, List[str]]) -> Tuple[str, str]:
+    """
+    Suggest a canonical projection name for an unmapped token.
+    Returns (suggested_proj, suggested_match), or ("", "") when no close match exists.
+    """
+    if not alias_map:
+        return "", ""
+
+    canonical_by_lower = {k.lower(): k for k in alias_map.keys()}
+    match_to_original: Dict[str, str] = {}
+
+    for canonical, aliases in alias_map.items():
+        cl = canonical.lower()
+        if cl not in match_to_original:
+            match_to_original[cl] = canonical
+        for alias in aliases:
+            al = str(alias).lower()
+            if al not in match_to_original:
+                match_to_original[al] = str(alias)
+
+    if not match_to_original:
+        return "", ""
+
+    raw_lower = raw_proj.lower()
+    candidates = list(match_to_original.keys())
+    matches = difflib.get_close_matches(raw_lower, candidates, n=1, cutoff=0.6)
+    if not matches:
+        return "", ""
+
+    matched_lower = matches[0]
+    matched_text = match_to_original[matched_lower]
+
+    if matched_lower in canonical_by_lower:
+        return canonical_by_lower[matched_lower], matched_text
+
+    suggested_proj = _infer_proj(matched_text, alias_map)
+    if suggested_proj is None:
+        return "", matched_text
+    return suggested_proj, matched_text
+
+
+def _record_proj_issue(
+    acc: Dict[Tuple[str, str, str, str, str], Dict[str, Any]],
+    *,
+    context: str,
+    rule_name: str,
+    raw_proj: str,
+    resolved_proj: str,
+    action: str,
+    source_file: str,
+    source_tensor: str,
+    derived_tensor: str,
+    suggested_proj: str,
+    suggested_match: str,
+) -> None:
+    """
+    Aggregate repeated proj canonicalization issues by semantic key.
+    Count increments per decision-time event; example fields keep first seen values.
+    """
+    key = (context, rule_name, raw_proj, resolved_proj, action)
+    if key in acc:
+        acc[key]["count"] = int(acc[key]["count"]) + 1
+        return
+
+    acc[key] = {
+        "context": context,
+        "rule_name": rule_name,
+        "raw_proj": raw_proj,
+        "resolved_proj": resolved_proj,
+        "action": action,
+        "count": 1,
+        "example_file": source_file,
+        "example_source_tensor": source_tensor,
+        "example_derived_tensor": derived_tensor,
+        "suggested_proj": suggested_proj,
+        "suggested_match": suggested_match,
+    }
+
+
 def _split_along_axis(x: np.ndarray, axis: int, splits: List[int]) -> List[np.ndarray]:
     if not isinstance(axis, Integral):
         raise ValueError(f"axis must be an int; got {type(axis).__name__}")
@@ -396,7 +476,14 @@ def _apply_rules(
     alias_map: Dict[str, List[str]],
     shared_keywords: List[str],
     proj_group_strict: bool,
+    proj_issue_acc: Optional[Dict[Tuple[str, str, str, str, str], Dict[str, Any]]] = None,
+    unmatched_reason_override: Optional[Dict[Tuple[str, str], str]] = None,
+    skip_fallback: Optional[Set[Tuple[str, str]]] = None,
 ) -> Optional[List[ExtractedBank]]:
+    canonical_keys_by_lower: Dict[str, str] = {}
+    if alias_map:
+        canonical_keys_by_lower = {k.lower(): k for k in alias_map.keys()}
+
     for r in rules:
         if not r.enabled:
             continue
@@ -420,11 +507,53 @@ def _apply_rules(
         if r.packed_split is None:
             if r.proj_group is not None:
                 raw = m.group(r.proj_group)
-                proj = _infer_proj(raw, alias_map)
+                raw_lower = raw.lower()
+                inferred = _infer_proj(raw, alias_map)
+                is_canonical_key = raw_lower in canonical_keys_by_lower
+                if is_canonical_key:
+                    proj = canonical_keys_by_lower[raw_lower]
+                else:
+                    proj = inferred
                 if proj is None:
+                    unmapped = bool(alias_map) and (not is_canonical_key) and (inferred is None)
                     if proj_group_strict:
+                        key = (str(fpath), name)
+                        if unmatched_reason_override is not None:
+                            unmatched_reason_override[key] = "proj_group_strict_unmapped"
+                        if skip_fallback is not None:
+                            skip_fallback.add(key)
+                        if unmapped and proj_issue_acc is not None:
+                            suggested_proj, suggested_match = _suggest_proj(raw, alias_map)
+                            _record_proj_issue(
+                                proj_issue_acc,
+                                context="proj_group",
+                                rule_name=r.name,
+                                raw_proj=raw,
+                                resolved_proj=raw,
+                                action="dropped_strict",
+                                source_file=str(fpath),
+                                source_tensor=name,
+                                derived_tensor=f"{name}::{raw}",
+                                suggested_proj=suggested_proj,
+                                suggested_match=suggested_match,
+                            )
                         return None
                     proj = raw
+                    if unmapped and proj_issue_acc is not None:
+                        suggested_proj, suggested_match = _suggest_proj(raw, alias_map)
+                        _record_proj_issue(
+                            proj_issue_acc,
+                            context="proj_group",
+                            rule_name=r.name,
+                            raw_proj=raw,
+                            resolved_proj=proj,
+                            action="kept_raw",
+                            source_file=str(fpath),
+                            source_tensor=name,
+                            derived_tensor=f"{name}::{proj}",
+                            suggested_proj=suggested_proj,
+                            suggested_match=suggested_match,
+                        )
             else:
                 proj = _infer_proj(name, alias_map)
             if proj is None:
@@ -470,10 +599,6 @@ def _apply_rules(
             msg = f"packed_split projs and splits length mismatch for rule={r.name} tensor={name}"
             raise PackedSplitError(msg)
 
-        canonical_keys_by_lower: Dict[str, str] = {}
-        if alias_map:
-            canonical_keys_by_lower = {k.lower(): k for k in alias_map.keys()}
-
         banks: List[ExtractedBank] = []
         for raw_proj, part in zip(proj_list, parts):
             if not alias_map:
@@ -483,8 +608,31 @@ def _apply_rules(
                 raw_proj_lower = raw_proj.lower()
                 if raw_proj_lower in canonical_keys_by_lower:
                     resolved_proj = canonical_keys_by_lower[raw_proj_lower]
+                    inferred = resolved_proj
                 else:
-                    resolved_proj = _infer_proj(raw_proj, alias_map) or raw_proj
+                    inferred = _infer_proj(raw_proj, alias_map)
+                    resolved_proj = inferred or raw_proj
+
+                unmapped = (
+                    bool(alias_map)
+                    and (raw_proj_lower not in canonical_keys_by_lower)
+                    and (inferred is None)
+                )
+                if unmapped and proj_issue_acc is not None:
+                    suggested_proj, suggested_match = _suggest_proj(raw_proj, alias_map)
+                    _record_proj_issue(
+                        proj_issue_acc,
+                        context="packed_split",
+                        rule_name=r.name,
+                        raw_proj=raw_proj,
+                        resolved_proj=resolved_proj,
+                        action="kept_raw",
+                        source_file=str(fpath),
+                        source_tensor=name,
+                        derived_tensor=f"{name}::split[{axis_kind}]::{resolved_proj}",
+                        suggested_proj=suggested_proj,
+                        suggested_match=suggested_match,
+                    )
 
             derived = f"{name}::split[{axis_kind}]::{resolved_proj}"
             banks.append(ExtractedBank(
@@ -848,6 +996,9 @@ def main():
     quant_rows: List[Dict[str, Any]] = []
     unmatched_rows: List[Dict[str, Any]] = []
     warn_log: List[str] = []
+    proj_issue_acc: Dict[Tuple[str, str, str, str, str], Dict[str, Any]] = {}
+    unmatched_reason_override: Dict[Tuple[str, str], str] = {}
+    skip_fallback: Set[Tuple[str, str]] = set()
 
     # Run-health summary accumulators.
     #
@@ -1101,6 +1252,7 @@ def main():
 
             is_shared = _is_shared_expert(name, shared_keywords)
             is_expertish = ("experts" in name.lower()) or is_shared
+            tensor_key = (str(fpath), name)
 
             if experts_only:
                 if not is_expertish:
@@ -1122,6 +1274,9 @@ def main():
                     alias_map,
                     shared_keywords,
                     proj_group_strict,
+                    proj_issue_acc=proj_issue_acc,
+                    unmatched_reason_override=unmatched_reason_override,
+                    skip_fallback=skip_fallback,
                 )
                 if extracted is not None:
                     extracted_via = "rule"
@@ -1133,18 +1288,23 @@ def main():
                 warn_log.append(f"[extract] rule application failed for {name}: {e}")
 
             if extracted is None:
-                try:
-                    extracted = _fallback_extract(name, arr, fpath, layer_re, expert_re, alias_map, shared_keywords)
-                    if extracted is not None:
-                        extracted_via = "fallback"
-                except Exception as e:
-                    warn_log.append(f"[extract] fallback failed for {name}: {e}")
-                    extracted = None
+                if tensor_key not in skip_fallback:
+                    try:
+                        extracted = _fallback_extract(name, arr, fpath, layer_re, expert_re, alias_map, shared_keywords)
+                        if extracted is not None:
+                            extracted_via = "fallback"
+                    except Exception as e:
+                        warn_log.append(f"[extract] fallback failed for {name}: {e}")
+                        extracted = None
 
             if extracted is None:
                 if experts_only and is_expertish:
                     unmatched_expertish += 1
                     _record_example(example_unmatched_expertish, name)
+                reason = unmatched_reason_override.get(
+                    tensor_key,
+                    "no_rule_match_or_proj_infer",
+                )
 
                 if dump_unmatched and experts_only and is_expertish:
                     unmatched_rows.append({
@@ -1153,7 +1313,7 @@ def main():
                         "dtype": str(arr.dtype),
                         "shape": tuple(arr.shape),
                         "ndim": int(arr.ndim),
-                        "reason": "no_rule_match_or_proj_infer"
+                        "reason": reason,
                     })
                 continue
 
@@ -1346,7 +1506,7 @@ def main():
             *QUANT_SIM_COLUMNS,
         ])
     um_df = pd.DataFrame(unmatched_rows) if unmatched_rows else pd.DataFrame()
-    wl_df = pd.DataFrame({"warning": warn_log}) if warn_log else pd.DataFrame()
+    proj_df = pd.DataFrame(list(proj_issue_acc.values())) if proj_issue_acc else pd.DataFrame()
 
     # CONTRACT SURFACE: write_manifest.artifacts stable key map
     # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
@@ -1373,6 +1533,52 @@ def main():
             run_dir,
             len(um_df),
         )
+    if not proj_df.empty:
+        # Keep detailed canonicalization diagnostics in a dedicated report artifact.
+        report_meta = _artifact_entry(
+            _write_df(
+                proj_df,
+                run_dir / "logs" / "proj_canonicalization_report.parquet",
+                fmt,
+                compression,
+            ),
+            run_dir,
+            len(proj_df),
+        )
+        artifacts["proj_canonicalization_report"] = report_meta
+
+        kept_raw = proj_df[proj_df["action"] == "kept_raw"] if "action" in proj_df.columns else pd.DataFrame()
+        if not kept_raw.empty:
+            packed_split_occurrences = int(
+                kept_raw.loc[kept_raw["context"] == "packed_split", "count"].sum()
+            )
+            proj_group_occurrences = int(
+                kept_raw.loc[kept_raw["context"] == "proj_group", "count"].sum()
+            )
+            unique_raw = int(kept_raw["raw_proj"].nunique())
+            total_occurrences = packed_split_occurrences + proj_group_occurrences
+            warn_log.append(
+                "[proj] unmapped proj tokens kept raw: "
+                f"packed_split={packed_split_occurrences}, "
+                f"proj_group={proj_group_occurrences} "
+                f"(unique={unique_raw}, occurrences={total_occurrences}). "
+                f"See {report_meta['path']}"
+            )
+
+        dropped_strict = proj_df[
+            (proj_df["action"] == "dropped_strict") & (proj_df["context"] == "proj_group")
+        ] if "action" in proj_df.columns and "context" in proj_df.columns else pd.DataFrame()
+        if not dropped_strict.empty:
+            dropped_occurrences = int(dropped_strict["count"].sum())
+            dropped_unique = int(dropped_strict["raw_proj"].nunique())
+            warn_log.append(
+                "[proj] strict proj_group dropped tensors due to unmapped proj tokens: "
+                f"occurrences={dropped_occurrences} "
+                f"(unique={dropped_unique}). "
+                f"See {report_meta['path']}"
+            )
+
+    wl_df = pd.DataFrame({"warning": warn_log}) if warn_log else pd.DataFrame()
     if not wl_df.empty:
         # CONTRACT SURFACE: logs/warnings.{parquet|csv} + write_manifest.artifacts["warnings"]
         # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.

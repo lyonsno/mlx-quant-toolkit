@@ -297,6 +297,115 @@ class PackedSplitStrictnessTests(unittest.TestCase):
                 Counter({"gate_proj": 2, "down_proj": 2}),
             )
 
+    def test_packed_split_unmapped_proj_token_writes_report_and_warning(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            arr = np.arange(2 * 6 * 4, dtype=np.float32).reshape(2, 6, 4)
+            proj_aliases = {
+                "down_proj": ["down_proj", "w2"],
+                "gate_proj": ["gate_proj", "w1"],
+                "up_proj": ["up_proj", "w3"],
+            }
+            run_dir, env = self._setup_run(
+                Path(tmp_dir),
+                strict_packed_split=True,
+                arr=arr,
+                proj_aliases=proj_aliases,
+                packed_split_projs=["w1", "down_projj"],
+            )
+            self._run_collect(run_dir, env, check=True)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            split_rows = [
+                row
+                for row in rows
+                if row.get("source_tensor") == "layers.0.experts.0.gate_proj.weight"
+                and "::split[rows]::" in row.get("derived_tensor", "")
+            ]
+            self.assertEqual(
+                Counter(row["proj"] for row in split_rows),
+                Counter({"gate_proj": 2, "down_projj": 2}),
+            )
+
+            write_manifest = json.loads((run_dir / "logs" / "write_manifest.json").read_text())
+            artifacts = write_manifest.get("artifacts", {})
+            self.assertIn("warnings", artifacts)
+            warnings_meta = artifacts["warnings"]
+            warnings_rel_path = Path(warnings_meta["path"])
+            self.assertIn("logs", warnings_rel_path.parts)
+            self.assertTrue(warnings_rel_path.name.startswith("warnings"))
+            warnings_path = (
+                warnings_rel_path
+                if warnings_rel_path.is_absolute()
+                else run_dir / warnings_rel_path
+            )
+            self.assertTrue(warnings_path.exists())
+            with warnings_path.open(newline="") as handle:
+                warning_rows = list(csv.DictReader(handle))
+            proj_warnings = [
+                row.get("warning", "")
+                for row in warning_rows
+                if "[proj] unmapped proj tokens kept raw" in row.get("warning", "")
+            ]
+
+            self.assertIn("proj_canonicalization_report", artifacts)
+            report_meta = artifacts["proj_canonicalization_report"]
+            report_rel_path = Path(report_meta["path"])
+            self.assertIn("logs", report_rel_path.parts)
+            self.assertTrue(
+                report_rel_path.name.startswith("proj_canonicalization_report")
+            )
+            report_path = (
+                report_rel_path
+                if report_rel_path.is_absolute()
+                else run_dir / report_rel_path
+            )
+            self.assertTrue(report_path.exists())
+            with report_path.open(newline="") as handle:
+                report_rows = list(csv.DictReader(handle))
+            self.assertEqual(int(report_meta["rows"]), len(report_rows))
+            packed_rows = [
+                row
+                for row in report_rows
+                if row.get("context") == "packed_split"
+                and row.get("raw_proj") == "down_projj"
+                and row.get("action") == "kept_raw"
+            ]
+            self.assertTrue(packed_rows)
+            self.assertTrue(all(row.get("resolved_proj") == "down_projj" for row in packed_rows))
+            self.assertTrue(all(row.get("suggested_proj", "") for row in packed_rows))
+            self.assertTrue(
+                all(row.get("suggested_proj") in set(proj_aliases.keys()) for row in packed_rows)
+            )
+
+            self.assertGreater(report_meta.get("rows", 0), 0)
+            kept_raw_rows = [row for row in report_rows if row.get("action") == "kept_raw"]
+            packed_split_occurrences = sum(
+                int(row.get("count", 0))
+                for row in kept_raw_rows
+                if row.get("context") == "packed_split"
+            )
+            proj_group_occurrences = sum(
+                int(row.get("count", 0))
+                for row in kept_raw_rows
+                if row.get("context") == "proj_group"
+            )
+            unique_raw = len({row.get("raw_proj") for row in kept_raw_rows})
+            total_occurrences = packed_split_occurrences + proj_group_occurrences
+            expected_warning = (
+                "[proj] unmapped proj tokens kept raw: "
+                f"packed_split={packed_split_occurrences}, "
+                f"proj_group={proj_group_occurrences} "
+                f"(unique={unique_raw}, occurrences={total_occurrences}). "
+                f"See {report_meta['path']}"
+            )
+            self.assertEqual(len(proj_warnings), 1)
+            self.assertEqual(proj_warnings[0], expected_warning)
+            self.assertEqual(packed_split_occurrences, 1)
+            self.assertEqual(proj_group_occurrences, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

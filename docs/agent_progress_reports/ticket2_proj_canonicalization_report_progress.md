@@ -1,0 +1,93 @@
+# Ticket: ticket2_proj_canonicalization_report — Progress
+
+- [2026-02-07] Goal: Add fail-first integration coverage for unmapped proj canonicalization surfacing (summary warning + aggregated `proj_canonicalization_report` artifact) for both packed-split tokens and non-strict proj-group captures.
+- [2026-02-07] Plan: Extend `tests/test_packed_split_strictness.py` and `tests/test_proj_group_normalization.py` with deterministic subprocess tests that assert `matrix_stats.csv` behavior plus `logs/warnings.csv`, `logs/proj_canonicalization_report.csv`, and `logs/write_manifest.json` artifact metadata.
+- [2026-02-07] Assumption: Because this is tests-first Phase 1, these new tests should fail pre-fix specifically on missing report/warning/manifest entries, not on extraction or config setup.
+- [2026-02-07] Changes made: Added `test_packed_split_unmapped_proj_token_writes_report_and_warning` in `tests/test_packed_split_strictness.py` and `test_proj_group_non_strict_unmapped_token_writes_report_and_warning` in `tests/test_proj_group_normalization.py`.
+- [2026-02-07] Non-vacuous test signal: each test asserts concrete extraction semantics (`matrix_stats.csv` proj values) plus explicit auditability artifacts (`logs/warnings.csv`, `logs/proj_canonicalization_report.csv`, and `write_manifest` artifact key/rows/path), so a pass requires both data correctness and visibility surfaces.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_packed_split_strictness.PackedSplitStrictnessTests.test_packed_split_unmapped_proj_token_writes_report_and_warning` -> FAIL as expected pre-fix.
+- [2026-02-07] Key failure excerpt: `AssertionError: False is not true` at `self.assertTrue(warnings_path.exists())`.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_non_strict_unmapped_token_writes_report_and_warning` -> FAIL as expected pre-fix.
+- [2026-02-07] Key failure excerpt: `AssertionError: False is not true` at `self.assertTrue(warnings_path.exists())`.
+- [2026-02-07] Test refinement (user notes):
+  - switched warning/report artifact path assertions to derive paths from `logs/write_manifest.json` artifact entries,
+  - added path invariants (`logs/` membership and basename prefix checks) instead of hardcoded extensions,
+  - softened packed-split integration suggestion assertion from exact `down_proj` to `non-empty && canonical-key-member`.
+- [2026-02-07] Added unit tests in `tests/test_proj_group_normalization.py` for planned helpers:
+  - `_record_proj_issue` coalesces identical keys, increments `count`, preserves first example fields,
+  - `_suggest_proj` returns canonical suggestion for close typo,
+  - `_suggest_proj` returns empty suggestions when no close match.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_packed_split_strictness.PackedSplitStrictnessTests.test_packed_split_unmapped_proj_token_writes_report_and_warning` -> FAIL as expected pre-fix.
+- [2026-02-07] Key failure excerpt: `AssertionError: 'warnings' not found in {...artifacts...}` at `self.assertIn("warnings", artifacts)`.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjInferenceUnitTests.test_record_proj_issue_coalesces_counts_and_keeps_first_example tests.test_proj_group_normalization.ProjInferenceUnitTests.test_suggest_proj_returns_canonical_for_close_typo tests.test_proj_group_normalization.ProjInferenceUnitTests.test_suggest_proj_returns_empty_when_no_close_match tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_non_strict_unmapped_token_writes_report_and_warning` -> FAIL as expected pre-fix.
+- [2026-02-07] Key failure excerpts:
+  - `AttributeError: module 'collect_data' has no attribute '_record_proj_issue'`
+  - `AttributeError: module 'collect_data' has no attribute '_suggest_proj'`
+  - `AssertionError: 'warnings' not found in {...artifacts...}`.
+- [2026-02-07] Policy update applied to tests: enforce a single `[proj]` warning line with explicit context breakdown in the stable template:
+  `[proj] unmapped proj tokens kept raw: packed_split={...}, proj_group={...} (unique={...}, occurrences={...}). See {report_path}`.
+- [2026-02-07] Test updates for policy:
+  - `tests/test_packed_split_strictness.py`: packed-split unmapped integration test now computes expected warning values from report rows and asserts exact warning string equality (including `See {write_manifest report path}`).
+  - `tests/test_proj_group_normalization.py`: non-strict proj-group unmapped integration test now asserts exact warning string equality from report-derived counts.
+  - `tests/test_proj_group_normalization.py`: added mixed-context integration test (`packed_split` + `proj_group` in same run) asserting exactly one `[proj]` warning line and both context counts > 0.
+  - `tests/test_proj_group_normalization.py`: generalized `_write_config` / `_setup_run` to support `rules=[...]` for multi-rule integration fixtures.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_packed_split_strictness.PackedSplitStrictnessTests.test_packed_split_unmapped_proj_token_writes_report_and_warning` -> FAIL as expected pre-fix.
+- [2026-02-07] Key failure excerpt: `AssertionError: 'warnings' not found in {...artifacts...}`.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_non_strict_unmapped_token_writes_report_and_warning tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_single_proj_warning_line_has_context_breakdown_across_contexts` -> FAIL as expected pre-fix.
+- [2026-02-07] Key failure excerpts: `AssertionError: 'warnings' not found in {...artifacts...}` for both integration tests.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjInferenceUnitTests.test_record_proj_issue_coalesces_counts_and_keeps_first_example tests.test_proj_group_normalization.ProjInferenceUnitTests.test_suggest_proj_returns_canonical_for_close_typo tests.test_proj_group_normalization.ProjInferenceUnitTests.test_suggest_proj_returns_empty_when_no_close_match` -> FAIL as expected pre-fix.
+- [2026-02-07] Key failure excerpts: `AttributeError: module 'collect_data' has no attribute '_record_proj_issue'` and `_suggest_proj`.
+- [2026-02-07] Count-semantics alignment update (user decision): switched tests to decision-time occurrence semantics across contexts.
+  - `tests/test_packed_split_strictness.py`: `packed_split_occurrences` expectation changed from `2` to `1` for one unresolved packed-split token decision.
+  - `tests/test_proj_group_normalization.py`: mixed-context test tightened to exact `packed_split_occurrences == 1` and `proj_group_occurrences == 1`.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_packed_split_strictness.PackedSplitStrictnessTests.test_packed_split_unmapped_proj_token_writes_report_and_warning` -> FAIL as expected pre-fix.
+- [2026-02-07] Key failure excerpt: `AssertionError: 'warnings' not found in {...artifacts...}`.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_single_proj_warning_line_has_context_breakdown_across_contexts tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_non_strict_unmapped_token_writes_report_and_warning` -> FAIL as expected pre-fix.
+- [2026-02-07] Key failure excerpt: `AssertionError: 'warnings' not found in {...artifacts...}` in both tests.
+- [2026-02-07] Test hardening tweak (user request): added `int(report_meta["rows"]) == len(report_rows)` assertions in all integration tests that read `proj_canonicalization_report` to ensure manifest row counts match actual artifact rows.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_packed_split_strictness.PackedSplitStrictnessTests.test_packed_split_unmapped_proj_token_writes_report_and_warning` -> FAIL as expected pre-fix.
+- [2026-02-07] Key failure excerpt: `AssertionError: 'warnings' not found in {...artifacts...}`.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_non_strict_unmapped_token_writes_report_and_warning tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_single_proj_warning_line_has_context_breakdown_across_contexts` -> FAIL as expected pre-fix.
+- [2026-02-07] Key failure excerpt: `AssertionError: 'warnings' not found in {...artifacts...}` in both tests.
+- [2026-02-07] Implementation (Phase 2): `scripts/collect_data.py` now records unresolved proj canonicalization issues at decision time via new helpers `_record_proj_issue` and `_suggest_proj` and threads a `proj_issue_acc` collector through `_apply_rules`.
+- [2026-02-07] Decision-time recording details:
+  - `packed_split`: record `kept_raw` when alias map is non-empty, token is not a canonical key (case-insensitive), and `_infer_proj` returns `None`.
+  - `proj_group` (non-strict): same unmapped condition records `kept_raw` when raw token is retained.
+  - strict path currently does not emit `dropped_strict` rows (kept minimal per ticket acceptance/tests).
+- [2026-02-07] End-of-run artifact wiring: writes aggregated `logs/proj_canonicalization_report.{parquet|csv}` only when non-empty, registers manifest artifact key `proj_canonicalization_report`, computes context totals from `action == "kept_raw"`, and appends exactly one warning line using the stable template with `See {report_meta['path']}`.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_packed_split_strictness tests.test_proj_group_normalization` -> PASS (`Ran 18 tests in 2.139s`).
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_run_health_json_integration tests.test_auditability_artifacts_integration` -> PASS (`Ran 6 tests in 1.321s`).
+- [2026-02-07] Follow-up tests-first update (strict drops): extended strict proj-group coverage to require a dedicated strict-drop warning + report rows with `action="dropped_strict"`, and added a mixed strict+packed-split test that enforces warning separation (strict warning present; kept-raw warning still exactly one with `proj_group=0`).
+- [2026-02-07] Test changes:
+  - `tests/test_proj_group_normalization.py::test_proj_group_strict_unmatched_when_alias_missing` now also asserts manifest warnings/report artifacts, `dropped_strict` row presence, strict warning line format, and zero kept-raw warning lines.
+  - Added `tests/test_proj_group_normalization.py::test_strict_proj_group_drops_have_separate_warning_and_do_not_change_kept_raw_counts` to assert both warning lines coexist correctly and dropped_strict does not affect kept_raw context counts.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_unmatched_when_alias_missing tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_strict_proj_group_drops_have_separate_warning_and_do_not_change_kept_raw_counts` -> FAIL as expected pre-fix.
+- [2026-02-07] Key failure excerpts:
+  - `AssertionError: 'warnings' not found in {...artifacts...}` (strict-only case)
+  - `AssertionError: 0 != 1` for strict warning count in mixed strict+packed-split case.
+- [2026-02-07] Implementation follow-up (strict drops): `scripts/collect_data.py` now records `action="dropped_strict"` for strict proj_group unmapped decisions before returning `None`, with suggestions/example fields captured via the same accumulator.
+- [2026-02-07] Added dedicated strict-drop warning synthesis from report rows where `action="dropped_strict"` and `context="proj_group"`:
+  `[proj] strict proj_group dropped tensors due to unmapped proj tokens: occurrences={...} (unique={...}). See {report_path}`.
+- [2026-02-07] Kept-raw warning remains unchanged and still filters `action == "kept_raw"` only, so strict drops do not affect fragmentation-risk counts.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_unmatched_when_alias_missing tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_strict_proj_group_drops_have_separate_warning_and_do_not_change_kept_raw_counts` -> PASS (`Ran 2 tests in 0.642s`).
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_packed_split_strictness tests.test_proj_group_normalization` -> PASS (`Ran 19 tests in 2.590s`).
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_run_health_json_integration tests.test_auditability_artifacts_integration` -> PASS (`Ran 6 tests in 1.283s`).
+- [2026-02-07] Docs rotation pass (user request): updated `README.md` and `future_work/current_work.md` so they reflect shipped proj-canonicalization surfacing behavior and no longer present Ticket 2 policy as open.
+- [2026-02-07] README updates:
+  - replaced stale “Pending decisions” section with a “Status notes” summary for kept-raw and strict-drop reporting,
+  - expanded `parsing.proj_group_strict` docs to describe strict-drop vs kept-raw behavior,
+  - documented `logs/proj_canonicalization_report.*` in run outputs and auditability artifacts,
+  - clarified warning-line semantics (`kept_raw` summary and strict-drop summary) and troubleshooting guidance.
+- [2026-02-07] `future_work/current_work.md` updates:
+  - removed the open question about unmapped `packed_split.projs`,
+  - added recently-resolved bullets describing `proj_canonicalization_report` and both `[proj]` warning summaries.
+- [2026-02-07] Commands run: `rg` + `sed` doc inspections only; no tests re-run in this docs-only step.
+- [2026-02-07] Wording cleanup pass (user request): aligned README warning-language with exact emitted `[proj]` prefixes/templates to avoid shorthand ambiguity.
+- [2026-02-07] README wording updates include explicit warning strings in status notes, parsing (`proj_group_strict`) behavior, packed-split unknown-token behavior, and auditability artifacts sections.
+- [2026-02-07] Commands run: `rg`/`sed` doc inspection only; no tests re-run for this wording-only pass.
+- [2026-02-07] Addendum implementation (strict proj_group side-channel): `scripts/collect_data.py` now accepts `unmatched_reason_override` and `skip_fallback` in `_apply_rules(...)` and sets them on strict unmapped proj_group drops.
+- [2026-02-07] Strict-drop behavior now writes unmatched reason override key `(source_file, source_tensor) -> "proj_group_strict_unmapped"`, marks tensor to skip fallback, and preserves existing `dropped_strict` report row recording.
+- [2026-02-07] Main loop now skips fallback for keys in `skip_fallback` and uses `unmatched_reason_override.get(key, "no_rule_match_or_proj_infer")` when writing unmatched rows.
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_proj_group_strict_unmatched_when_alias_missing tests.test_proj_group_normalization.ProjGroupNormalizationIntegrationTests.test_strict_proj_group_drops_have_separate_warning_and_do_not_change_kept_raw_counts` -> PASS (`Ran 2 tests in 0.931s`).
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_packed_split_strictness tests.test_proj_group_normalization` -> PASS (`Ran 19 tests in 3.039s`).
+- [2026-02-07] Command run: `uv run python -m unittest tests.test_run_health_json_integration tests.test_auditability_artifacts_integration` -> PASS (`Ran 6 tests in 1.877s`).

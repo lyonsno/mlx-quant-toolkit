@@ -5,15 +5,15 @@ from `.safetensors` and `.npz`, computing per-expert stats, and optionally simul
 MLX quantization/dequantization error. The outputs are designed to be inspectable and
 auditable: each run writes durable JSON “context” and “what was actually written” artifacts.
 
-## Pending decisions (read this first)
+## Status notes
 
-Some behaviors are still pending a policy decision, but the pipeline already works end-to-end.
-Where this matters in the README, we mark those statements with `*` so you can avoid treating
-them as final contracts. This section summarizes the open decisions so readers get context
-up front, and the `*` markers below point to the exact spots they affect.
-
-Pending decisions (*):
-- For `packed_split.projs` tokens that do not map via `proj_aliases`, whether to keep raw values (permissive) or fail under stricter policy.
+Proj canonicalization uncertainty is now surfaced explicitly:
+- Unmapped tokens that are kept raw are summarized in `logs/warnings.*` and detailed in
+  `logs/proj_canonicalization_report.*` (`action="kept_raw"`), using the warning prefix:
+  `[proj] unmapped proj tokens kept raw: ... See ...`.
+- Unmapped `proj_group` tokens dropped under `parsing.proj_group_strict=true` are also reported
+  in `logs/proj_canonicalization_report.*` (`action="dropped_strict"`), using the warning prefix:
+  `[proj] strict proj_group dropped tensors due to unmapped proj tokens: ... See ...`.
 
 ## Quickstart
 
@@ -120,7 +120,11 @@ Important keys under `parsing`:
 - `expert_regex`: regex used to parse the expert id (first capture group).
 - `proj_aliases`: map of canonical proj names to alias strings used for proj inference.
 - `shared_expert_keywords`: keywords that must all appear to mark a tensor as a shared expert.
-- `proj_group_strict`: when a rule uses `proj_group`, require alias resolution via `proj_aliases` (otherwise skip the rule).
+- `proj_group_strict`: when a rule uses `proj_group`, require alias resolution via `proj_aliases`.
+  - If `true`, unmapped `proj_group` tokens are dropped from extraction and surfaced as
+    `action="dropped_strict"` in `logs/proj_canonicalization_report.*` with the warning:
+    `[proj] strict proj_group dropped tensors due to unmapped proj tokens: occurrences={...} (unique={...}). See {report_path}`.
+  - If `false`, unmapped tokens are kept raw and surfaced as `action="kept_raw"` with the kept-raw `[proj]` warning.
 - `strict_packed_split`: if true, packed_split mismatches raise; if false they warn + fall back.
 
 ### Extraction rules and canonical shapes
@@ -131,7 +135,7 @@ Each extraction rule declares how to map a matched tensor into a canonical axis 
 - `ndim`: expected input ndim
 - `layout`: `{layer_axis, expert_axis, rows_axis, cols_axis}` to transpose into `(L,E,R,C)` / `(E,R,C)` / `(R,C)`
 - Optional `proj_group` / `expert_group`: regex capture group indices used to extract proj/expert id
-- Optional `packed_split`*: split a fused matrix along rows/cols into multiple projections
+- Optional `packed_split`: split a fused matrix along rows/cols into multiple projections
 
 If no rule matches, a heuristic fallback tries:
 
@@ -180,8 +184,11 @@ Why this adds complexity / how to think about it:
   rules; when set to `false` the run continues but records `packed_split failed ...` warnings in
   `logs/warnings.*`.
 - `packed_split.projs` are canonicalized via `parsing.proj_aliases` using the same inference gate
-  as other proj paths (known aliases map to canonical names; unknown tokens are kept raw and may
-  still fragment tables by `proj`).
+  as other proj paths (known aliases map to canonical names).
+- Unknown packed-split tokens are kept raw (permissive behavior) and surfaced in
+  `logs/proj_canonicalization_report.*` with `context="packed_split"` + `action="kept_raw"`,
+  plus the run-level warning:
+  `[proj] unmapped proj tokens kept raw: packed_split={...}, proj_group={...} (unique={...}, occurrences={...}). See {report_path}`.
 
 Practical sanity checks when you add/modify rules:
 
@@ -240,6 +247,7 @@ runs/<model-id>/<run-name>/
     B_quant_deltas.{parquet|csv}             (optional; requires `delta_pairs`)
   logs/
     warnings.{parquet|csv}                   (only if warnings were emitted)
+    proj_canonicalization_report.{parquet|csv} (only when proj canonicalization issues were recorded)
     index_report.json                        (only if `used_for_scan` is true)
     model_config.raw.json                    (metadata enabled + config found)
     model_shape_budget.json                  (metadata enabled + config found)
@@ -274,6 +282,15 @@ Contract-writing blocks in code are tagged with short `CONTRACT SURFACE:` marker
 - `logs/write_manifest.json` records:
   - requested output settings (`format`, `compression`)
   - the actual written artifact paths, formats, row counts, and Parquet→CSV fallbacks
+- `logs/proj_canonicalization_report.*` (optional) records aggregated unresolved projection
+  canonicalization events with counts/examples/suggestions:
+  - `context` (`packed_split` or `proj_group`)
+  - `action` (`kept_raw` or `dropped_strict`)
+  - `raw_proj`, `resolved_proj`, `count`, example fields, and suggestion fields
+- `logs/warnings.*` includes at most one kept-raw proj summary line and (when applicable) one
+  strict-drop proj summary line, both pointing to the report path from `write_manifest`:
+  - kept raw: `[proj] unmapped proj tokens kept raw: packed_split={...}, proj_group={...} (unique={...}, occurrences={...}). See {report_path}`
+  - strict drop: `[proj] strict proj_group dropped tensors due to unmapped proj tokens: occurrences={...} (unique={...}). See {report_path}`
 - `logs/run_health.json` records:
   - scan summary (files scanned, tensors observed)
   - extraction summary (rule vs fallback counts, unmatched counts)
@@ -332,6 +349,7 @@ file, strict_index enforces index validity but does not expand the scan or requi
 - Parquet unexpectedly became CSV: check `logs/write_manifest.json` for the fallback `error`.
 - bfloat16 decode errors: install `ml-dtypes` (NumPy needs it to handle `"bfloat16"` from safetensors).
 - Packed split failures: set `parsing.strict_packed_split=false` to warn + fall back (see `logs/warnings.*`).
+- Proj canonicalization uncertainty: inspect `logs/proj_canonicalization_report.*`; warning summaries point to the exact report path.
 - Index strictness: set `scan.strict_index=false` to allow missing/invalid index fallbacks. Missing indexed shards are recorded in `logs/warnings.*` and `logs/run_health.json`, and the run continues.
 - MLX missing or failing: set `mlx.enabled=false` to skip quant sims; errors and skips are recorded in `logs/warnings.*`.
 

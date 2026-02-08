@@ -12,11 +12,13 @@ Planned Changes
 
 Open Questions
 
-- For `packed_split.projs` that don’t map to a canonical proj: should we (a) keep raw with a warning (permissive), or (b) drop/fail under strict mode to prevent fragmentation?
 - We need to pick a license.
 
 Recently Resolved (doc drift cleanup)
 - `packed_split.projs` values are canonicalized through `parsing.proj_aliases` for packed splits, so known aliases (e.g., `w1`/`w2`) now emit canonical `proj`/`derived_tensor` labels.
+- Unmapped proj canonicalization uncertainty is now surfaced end-of-run via `logs/proj_canonicalization_report.{parquet|csv}` with aggregated rows, plus warning summaries in `logs/warnings.*`:
+  - kept-raw summary: `[proj] unmapped proj tokens kept raw: ... See ...` (counts from `action="kept_raw"` only)
+  - strict-drop summary: `[proj] strict proj_group dropped tensors due to unmapped proj tokens: ... See ...` (from `action="dropped_strict"` rows)
 - Add context manager around opening .npz files
 - Add `logs/run_health.json` summarizing: files scanned, tensors observed, extracted-by-rule vs fallback counts, unmatched count, and (if index-active) missing/extra shard/tensor counts.
 - Add run-level visibility for fallback usage (via `logs/run_health.json` counts for rule vs fallback extraction).
