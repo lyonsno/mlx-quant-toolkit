@@ -34,6 +34,8 @@ htmlcov/
 # IDE / editor settings
 .vscode/
 .idea/
+codebook.toml
+.zed/
 
 # Notebooks and data artifacts
 .ipynb_checkpoints
