@@ -349,6 +349,9 @@ If `scan.strict_index=true`, a valid index must be present whenever index discov
 When index mode is active, missing indexed shards cause a non-zero exit. When `model_path` is a
 file, strict_index enforces index validity but does not expand the scan or require other shards.
 
+See `docs/safetensors_index_handling.md` for a detailed explanation of index handling behavior,
+including edge cases, error scenarios, and troubleshooting guidance.
+
 ## Troubleshooting
 
 - Parquet unexpectedly became CSV: check `logs/write_manifest.json` for the fallback `error`.
