@@ -8,6 +8,8 @@ Your job as an agent: make small, correct, test-backed changes quickly, without 
 
 This file is repo-specific. Follow `~/.codex/AGENTS.md` for global defaults, and use this file for local contracts.
 
+**Note:** Before beginning any work that involves exploring the repository, please read `docs/quick_navigation_reference.md` to understand the project structure, file locations, and navigation conventions.
+
 ---
 
 ## Repo orientation (what matters)
