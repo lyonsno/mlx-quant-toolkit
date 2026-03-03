@@ -16,17 +16,59 @@ from typing import Any, Dict, List
 import pandas as pd
 
 
-def _read_df(path: Path) -> pd.DataFrame:
+MATRIX_STATS_EMPTY_COLUMNS = [
+    "layer",
+    "proj",
+    "mean",
+    "std",
+    "mean_abs",
+    "rms",
+    "max_abs",
+    "p50_abs",
+    "p99_abs",
+    "p999_abs",
+    "outlier_max_over_mean",
+    "outlier_p99_over_median",
+    "outlier_p999_over_median",
+]
+
+QUANT_SIM_EMPTY_COLUMNS = [
+    "derived_tensor",
+    "layer",
+    "block4",
+    "proj",
+    "expert_id",
+    "rows",
+    "cols",
+    "scheme",
+    "w_rel_fro",
+    "w_rel_max",
+    "scale_mean",
+    "scale_max",
+    "bias_mean",
+    "bias_max",
+]
+
+
+def _read_df(path: Path, empty_columns: List[str] | None = None) -> pd.DataFrame:
+    def _read_csv(csv_path: Path) -> pd.DataFrame:
+        try:
+            return pd.read_csv(csv_path)
+        except pd.errors.EmptyDataError:
+            if empty_columns is None:
+                return pd.DataFrame()
+            return pd.DataFrame(columns=list(empty_columns))
+
     if path.exists():
         if path.suffix == ".parquet":
             return pd.read_parquet(path)
         if path.suffix == ".csv":
-            return pd.read_csv(path)
+            return _read_csv(path)
     # try fallback extensions
     if path.with_suffix(".parquet").exists():
         return pd.read_parquet(path.with_suffix(".parquet"))
     if path.with_suffix(".csv").exists():
-        return pd.read_csv(path.with_suffix(".csv"))
+        return _read_csv(path.with_suffix(".csv"))
     raise FileNotFoundError(path)
 
 
@@ -77,8 +119,14 @@ def main():
     fmt = cfg.get("output", {}).get("format", "parquet")
     compression = cfg.get("output", {}).get("compression", None)
 
-    ms = _read_df(run_dir / "data" / "matrix_stats.parquet")
-    qs = _read_df(run_dir / "data" / "quant_sim.parquet")
+    ms = _read_df(
+        run_dir / "data" / "matrix_stats.parquet",
+        empty_columns=MATRIX_STATS_EMPTY_COLUMNS,
+    )
+    qs = _read_df(
+        run_dir / "data" / "quant_sim.parquet",
+        empty_columns=QUANT_SIM_EMPTY_COLUMNS,
+    )
 
     # ensure block4 exists
     if "block4" not in ms.columns:

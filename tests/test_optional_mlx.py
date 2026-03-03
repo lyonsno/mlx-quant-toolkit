@@ -50,12 +50,12 @@ class OptionalMlxPipelineTests(unittest.TestCase):
         )
         return stub_root
 
-    def _run(self, args, env=None):
+    def _run(self, args, env=None, check=True):
         return subprocess.run(
             args,
             cwd=self.repo_root,
             env=env,
-            check=True,
+            check=check,
             capture_output=True,
             text=True,
         )
@@ -173,6 +173,142 @@ class OptionalMlxPipelineTests(unittest.TestCase):
                 matrix_rows = list(csv.DictReader(handle))
 
             self.assertEqual(len(matrix_rows), 0)
+
+    def test_build_tables_handles_legitimate_zero_row_collect_run(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tensor_name = "layers.0.experts.0.weird_proj.weight"
+            run_dir, env, _ = self._setup_and_collect(
+                Path(tmp_dir),
+                tensor_key=tensor_name,
+                cfg_overrides={
+                    "scan": {"experts_only": True},
+                    "debug": {"dump_unmatched_tensors": True},
+                },
+            )
+
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"build_tables should succeed for zero-row runs. Output:\n{output}",
+            )
+
+            a_global = run_dir / "tables" / "A_weight_global_summary.csv"
+            b_global = run_dir / "tables" / "B_quant_global_summary.csv"
+            self.assertTrue(a_global.exists())
+            self.assertTrue(b_global.exists())
+
+            with a_global.open(newline="") as handle:
+                a_reader = csv.DictReader(handle)
+                a_rows = list(a_reader)
+            self.assertEqual(len(a_rows), 0)
+            self.assertIsNotNone(a_reader.fieldnames)
+            self.assertIn("proj", a_reader.fieldnames)
+            self.assertIn("mean__median", a_reader.fieldnames)
+
+            with b_global.open(newline="") as handle:
+                b_reader = csv.DictReader(handle)
+                b_rows = list(b_reader)
+            self.assertEqual(len(b_rows), 0)
+            self.assertIsNotNone(b_reader.fieldnames)
+            self.assertIn("proj", b_reader.fieldnames)
+            self.assertIn("scheme", b_reader.fieldnames)
+            self.assertIn("w_rel_fro__median", b_reader.fieldnames)
+
+    def test_build_tables_handles_header_only_empty_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+
+            cfg = {
+                "output": {"format": "csv", "compression": None},
+                "delta_pairs": [],
+            }
+            (run_dir / "analysis_config.json").write_text(json.dumps(cfg, indent=2))
+
+            matrix_cols = [
+                "layer",
+                "proj",
+                "mean",
+                "std",
+                "mean_abs",
+                "rms",
+                "max_abs",
+                "p50_abs",
+                "p99_abs",
+                "p999_abs",
+                "outlier_max_over_mean",
+                "outlier_p99_over_median",
+                "outlier_p999_over_median",
+            ]
+            with (data_dir / "matrix_stats.csv").open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=matrix_cols)
+                writer.writeheader()
+
+            quant_cols = [
+                "layer",
+                "proj",
+                "scheme",
+                "w_rel_fro",
+                "w_rel_max",
+                "scale_mean",
+                "scale_max",
+                "bias_mean",
+                "bias_max",
+            ]
+            with (data_dir / "quant_sim.csv").open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=quant_cols)
+                writer.writeheader()
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            self.assertEqual(result.returncode, 0, f"build_tables failed: {output}")
+
+            a_layer = run_dir / "tables" / "A_weight_layer_summary.csv"
+            b_layer = run_dir / "tables" / "B_quant_layer_summary.csv"
+            self.assertTrue(a_layer.exists())
+            self.assertTrue(b_layer.exists())
+
+            with a_layer.open(newline="") as handle:
+                a_reader = csv.DictReader(handle)
+                a_rows = list(a_reader)
+            self.assertEqual(len(a_rows), 0)
+            self.assertIsNotNone(a_reader.fieldnames)
+            self.assertIn("layer", a_reader.fieldnames)
+            self.assertIn("proj", a_reader.fieldnames)
+            self.assertIn("mean__median", a_reader.fieldnames)
+
+            with b_layer.open(newline="") as handle:
+                b_reader = csv.DictReader(handle)
+                b_rows = list(b_reader)
+            self.assertEqual(len(b_rows), 0)
+            self.assertIsNotNone(b_reader.fieldnames)
+            self.assertIn("layer", b_reader.fieldnames)
+            self.assertIn("proj", b_reader.fieldnames)
+            self.assertIn("scheme", b_reader.fieldnames)
+            self.assertIn("w_rel_fro__median", b_reader.fieldnames)
 
     def test_build_tables_computes_quant_deltas_from_manual_inputs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
