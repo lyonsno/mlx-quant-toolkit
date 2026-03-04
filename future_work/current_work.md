@@ -1,7 +1,6 @@
 Remaining Identified Issues
 
 - Hard errors are inconsistently surfaced (SystemExit vs tracebacks) and usually produce no structured failure artifacts. See `future_work/error_logging_and_hard_error_consistency.md`.
-- Optional dependency packaging has been canonicalized in `pyproject.toml` (base deps vs `optional-dependencies` extras).
 
 Planned Changes
 
@@ -20,6 +19,7 @@ Open Questions
 - We need to pick a license.
 
 Recently Resolved (doc drift cleanup)
+- Optional dependency packaging issue has been handled: `pyproject.toml` now clearly separates base dependencies from `optional-dependencies` extras.
 - `packed_split.projs` values are canonicalized through `parsing.proj_aliases` for packed splits, so known aliases (e.g., `w1`/`w2`) now emit canonical `proj`/`derived_tensor` labels.
 - Unmapped proj canonicalization uncertainty is now surfaced end-of-run via `logs/proj_canonicalization_report.{parquet|csv}` with aggregated rows, plus warning summaries in `logs/warnings.*`:
   - kept-raw summary: `[proj] unmapped proj tokens kept raw: ... See ...` (counts from `action="kept_raw"` only)
