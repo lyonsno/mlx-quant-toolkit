@@ -269,6 +269,21 @@ runs/<model-id>/<run-name>/
     layer/
 ```
 
+### build_tables contracts for plotting
+
+Plotting code usually assumes stable table names, columns, and row semantics. Those assumptions are
+locked down by acceptance-style tests in `tests/test_build_tables_contract.py`.
+
+Current contract coverage includes:
+
+- A-table schema invariants (`A_weight_layer_summary`, `A_weight_block4_summary`, `A_weight_global_summary`).
+- Zero-row/header-only behavior (all summary tables still emit stable headers and manifest row counts).
+- Parquet requested output with CSV fallback (manifest metadata and on-disk artifacts stay consistent).
+- Quant-error-row handling in B tables (error schemes remain represented; metric cells may be blank when inputs are missing).
+
+If you change `scripts/build_tables.py` in a way that affects plotting assumptions, update these tests
+in the same change.
+
 ### Auditability artifacts (logs)
 
 These log outputs are contract surfaces: they are designed to be stable, auditable artifacts.

@@ -1,0 +1,717 @@
+import csv
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+class BuildTablesContractTests(unittest.TestCase):
+    MATRIX_STATS_INPUT_COLUMNS = [
+        "layer",
+        "proj",
+        "mean",
+        "std",
+        "mean_abs",
+        "rms",
+        "max_abs",
+        "p50_abs",
+        "p99_abs",
+        "p999_abs",
+        "outlier_max_over_mean",
+        "outlier_p99_over_median",
+        "outlier_p999_over_median",
+    ]
+
+    QUANT_SIM_INPUT_COLUMNS = [
+        "derived_tensor",
+        "layer",
+        "proj",
+        "expert_id",
+        "rows",
+        "cols",
+        "scheme",
+        "w_rel_fro",
+        "w_rel_max",
+        "scale_mean",
+        "scale_max",
+        "bias_mean",
+        "bias_max",
+        "error",
+    ]
+
+    A_STATS = [
+        "mean",
+        "std",
+        "mean_abs",
+        "rms",
+        "max_abs",
+        "p50_abs",
+        "p99_abs",
+        "p999_abs",
+        "outlier_max_over_mean",
+        "outlier_p99_over_median",
+        "outlier_p999_over_median",
+    ]
+
+    B_METRICS = [
+        "w_rel_fro",
+        "w_rel_max",
+        "scale_mean",
+        "scale_max",
+        "bias_mean",
+        "bias_max",
+    ]
+
+    def setUp(self):
+        self.repo_root = Path(__file__).resolve().parents[1]
+
+    def _run(self, args, env=None, check=True):
+        return subprocess.run(
+            args,
+            cwd=self.repo_root,
+            env=env,
+            check=check,
+            capture_output=True,
+            text=True,
+        )
+
+    def _write_config(self, run_dir: Path, *, output_format: str, compression):
+        cfg = {
+            "output": {"format": output_format, "compression": compression},
+            "delta_pairs": [],
+        }
+        (run_dir / "analysis_config.json").write_text(json.dumps(cfg, indent=2))
+
+    def _write_matrix_stats_csv(self, data_dir: Path, rows):
+        with (data_dir / "matrix_stats.csv").open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=self.MATRIX_STATS_INPUT_COLUMNS)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: row.get(k, "") for k in self.MATRIX_STATS_INPUT_COLUMNS})
+
+    def _write_quant_sim_csv(self, data_dir: Path, rows):
+        with (data_dir / "quant_sim.csv").open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=self.QUANT_SIM_INPUT_COLUMNS)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: row.get(k, "") for k in self.QUANT_SIM_INPUT_COLUMNS})
+
+    def _run_build_tables(self, run_dir: Path):
+        env = os.environ.copy()
+        env["PYTHONWARNINGS"] = "default"
+        result = self._run(
+            [
+                sys.executable,
+                str(self.repo_root / "scripts" / "build_tables.py"),
+                "--run-dir",
+                str(run_dir),
+            ],
+            env=env,
+            check=False,
+        )
+        output = (result.stdout or "") + (result.stderr or "")
+        self.assertEqual(result.returncode, 0, f"build_tables failed: {output}")
+
+    def _read_csv(self, path: Path):
+        with path.open(newline="") as handle:
+            reader = csv.DictReader(handle)
+            rows = list(reader)
+        return reader.fieldnames, rows
+
+    def _expected_a_columns(self, group_cols, agg_cols):
+        cols = list(group_cols)
+        for stat in self.A_STATS:
+            for agg in agg_cols:
+                cols.append(f"{stat}__{agg}")
+        return cols
+
+    def _expected_b_columns(self, group_cols, agg_cols):
+        cols = list(group_cols)
+        for metric in self.B_METRICS:
+            for agg in agg_cols:
+                cols.append(f"{metric}__{agg}")
+        return cols
+
+    def _sample_matrix_rows(self):
+        return [
+            {
+                "layer": 0,
+                "proj": "down_proj",
+                "mean": 1.0,
+                "std": 0.1,
+                "mean_abs": 1.0,
+                "rms": 1.0,
+                "max_abs": 1.2,
+                "p50_abs": 1.0,
+                "p99_abs": 1.2,
+                "p999_abs": 1.2,
+                "outlier_max_over_mean": 1.2,
+                "outlier_p99_over_median": 1.2,
+                "outlier_p999_over_median": 1.2,
+            },
+            {
+                "layer": 1,
+                "proj": "down_proj",
+                "mean": 2.0,
+                "std": 0.2,
+                "mean_abs": 2.0,
+                "rms": 2.0,
+                "max_abs": 2.2,
+                "p50_abs": 2.0,
+                "p99_abs": 2.2,
+                "p999_abs": 2.2,
+                "outlier_max_over_mean": 1.1,
+                "outlier_p99_over_median": 1.1,
+                "outlier_p999_over_median": 1.1,
+            },
+        ]
+
+    def _sample_quant_rows(self):
+        return [
+            {
+                "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                "layer": 0,
+                "proj": "down_proj",
+                "expert_id": 0,
+                "rows": 2,
+                "cols": 2,
+                "scheme": "scheme_a",
+                "w_rel_fro": 0.10,
+                "w_rel_max": 0.15,
+                "scale_mean": 0.0,
+                "scale_max": 0.0,
+                "bias_mean": 0.0,
+                "bias_max": 0.0,
+                "error": "",
+            },
+            {
+                "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                "layer": 0,
+                "proj": "down_proj",
+                "expert_id": 0,
+                "rows": 2,
+                "cols": 2,
+                "scheme": "scheme_b",
+                "w_rel_fro": 0.20,
+                "w_rel_max": 0.25,
+                "scale_mean": 0.0,
+                "scale_max": 0.0,
+                "bias_mean": 0.0,
+                "bias_max": 0.0,
+                "error": "",
+            },
+            {
+                "derived_tensor": "layers.1.experts.0.down_proj.weight",
+                "layer": 1,
+                "proj": "down_proj",
+                "expert_id": 0,
+                "rows": 2,
+                "cols": 2,
+                "scheme": "scheme_a",
+                "w_rel_fro": 0.30,
+                "w_rel_max": 0.35,
+                "scale_mean": 0.0,
+                "scale_max": 0.0,
+                "bias_mean": 0.0,
+                "bias_max": 0.0,
+                "error": "",
+            },
+            {
+                "derived_tensor": "layers.1.experts.0.down_proj.weight",
+                "layer": 1,
+                "proj": "down_proj",
+                "expert_id": 0,
+                "rows": 2,
+                "cols": 2,
+                "scheme": "scheme_b",
+                "w_rel_fro": 0.40,
+                "w_rel_max": 0.45,
+                "scale_mean": 0.0,
+                "scale_max": 0.0,
+                "bias_mean": 0.0,
+                "bias_max": 0.0,
+                "error": "",
+            },
+        ]
+
+    def test_build_tables_a_table_schema_invariants(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, output_format="csv", compression=None)
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+            self._write_quant_sim_csv(data_dir, self._sample_quant_rows())
+
+            self._run_build_tables(run_dir)
+
+            a_layer_cols, a_layer_rows = self._read_csv(run_dir / "tables" / "A_weight_layer_summary.csv")
+            a_block4_cols, a_block4_rows = self._read_csv(run_dir / "tables" / "A_weight_block4_summary.csv")
+            a_global_cols, a_global_rows = self._read_csv(run_dir / "tables" / "A_weight_global_summary.csv")
+
+            self.assertEqual(
+                a_layer_cols,
+                self._expected_a_columns(["layer", "proj"], ["median", "mean", "std", "p90", "p99"]),
+            )
+            self.assertEqual(
+                a_block4_cols,
+                self._expected_a_columns(["block4", "proj"], ["median", "mean", "std", "p90", "p99"]),
+            )
+            self.assertEqual(
+                a_global_cols,
+                self._expected_a_columns(["proj"], ["min", "p01", "median", "p99", "max"]),
+            )
+
+            self.assertEqual(len(a_layer_rows), 2)
+            self.assertEqual(len(a_block4_rows), 1)
+            self.assertEqual(len(a_global_rows), 1)
+
+    def test_build_tables_zero_row_inputs_preserve_headers_and_manifest_rows(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, output_format="csv", compression=None)
+            self._write_matrix_stats_csv(data_dir, [])
+            self._write_quant_sim_csv(data_dir, [])
+
+            self._run_build_tables(run_dir)
+
+            expected_headers = {
+                "A_weight_layer_summary": self._expected_a_columns(["layer", "proj"], ["median", "mean", "std", "p90", "p99"]),
+                "A_weight_block4_summary": self._expected_a_columns(["block4", "proj"], ["median", "mean", "std", "p90", "p99"]),
+                "A_weight_global_summary": self._expected_a_columns(["proj"], ["min", "p01", "median", "p99", "max"]),
+                "B_quant_layer_summary": self._expected_b_columns(["layer", "proj", "scheme"], ["median", "mean", "p90", "p99"]),
+                "B_quant_block4_summary": self._expected_b_columns(["block4", "proj", "scheme"], ["median", "mean", "p90", "p99"]),
+                "B_quant_global_summary": self._expected_b_columns(["proj", "scheme"], ["min", "p01", "median", "p99", "max"]),
+            }
+
+            for artifact, expected in expected_headers.items():
+                cols, rows = self._read_csv(run_dir / "tables" / f"{artifact}.csv")
+                self.assertEqual(cols, expected)
+                self.assertEqual(len(rows), 0)
+
+            manifest = json.loads((run_dir / "logs" / "tables_write_manifest.json").read_text())
+            artifacts = manifest.get("artifacts", {})
+            self.assertEqual(sorted(artifacts), sorted(expected_headers))
+            for name in expected_headers:
+                entry = artifacts[name]
+                self.assertEqual(entry.get("format"), "csv")
+                self.assertFalse(entry.get("fallback"))
+                self.assertEqual(entry.get("error"), "")
+                self.assertEqual(entry.get("rows"), 0)
+                self.assertEqual(entry.get("path"), f"tables/{name}.csv")
+
+    def test_build_tables_parquet_fallback_contract(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, output_format="parquet", compression="invalid-codec")
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+            self._write_quant_sim_csv(data_dir, self._sample_quant_rows())
+
+            self._run_build_tables(run_dir)
+
+            expected_rows = {
+                "A_weight_layer_summary": 2,
+                "A_weight_block4_summary": 1,
+                "A_weight_global_summary": 1,
+                "B_quant_layer_summary": 4,
+                "B_quant_block4_summary": 2,
+                "B_quant_global_summary": 2,
+            }
+
+            manifest = json.loads((run_dir / "logs" / "tables_write_manifest.json").read_text())
+            artifacts = manifest.get("artifacts", {})
+            self.assertEqual(sorted(artifacts), sorted(expected_rows))
+
+            for name, expected_count in expected_rows.items():
+                entry = artifacts[name]
+                self.assertEqual(entry.get("format"), "csv")
+                self.assertTrue(entry.get("fallback"))
+                self.assertIsInstance(entry.get("error"), str)
+                self.assertTrue(entry.get("error"))
+                self.assertEqual(entry.get("path"), f"tables/{name}.csv")
+                self.assertEqual(entry.get("rows"), expected_count)
+
+                csv_cols, csv_rows = self._read_csv(run_dir / "tables" / f"{name}.csv")
+                self.assertGreater(len(csv_cols), 0)
+                self.assertEqual(len(csv_rows), expected_count)
+
+                parquet_path = run_dir / "tables" / f"{name}.parquet"
+                self.assertFalse(parquet_path.exists(), f"Unexpected stale parquet file: {parquet_path}")
+
+            a_global_cols, a_global_rows = self._read_csv(run_dir / "tables" / "A_weight_global_summary.csv")
+            self.assertIn("mean__median", a_global_cols)
+            self.assertEqual(len(a_global_rows), 1)
+            self.assertAlmostEqual(float(a_global_rows[0]["mean__median"]), 1.5)
+
+    def test_build_tables_quant_error_rows_are_represented_in_b_summaries(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, output_format="csv", compression=None)
+            self._write_matrix_stats_csv(
+                data_dir,
+                [
+                    {
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "mean": 1.0,
+                        "std": 0.1,
+                        "mean_abs": 1.0,
+                        "rms": 1.0,
+                        "max_abs": 1.2,
+                        "p50_abs": 1.0,
+                        "p99_abs": 1.2,
+                        "p999_abs": 1.2,
+                        "outlier_max_over_mean": 1.2,
+                        "outlier_p99_over_median": 1.2,
+                        "outlier_p999_over_median": 1.2,
+                    }
+                ],
+            )
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_ok",
+                        "w_rel_fro": 0.1,
+                        "w_rel_max": 0.2,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        "derived_tensor": "layers.0.experts.1.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 1,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_err",
+                        "w_rel_fro": None,
+                        "w_rel_max": None,
+                        "scale_mean": None,
+                        "scale_max": None,
+                        "bias_mean": None,
+                        "bias_max": None,
+                        "error": "RuntimeError: stub quantize fail",
+                    },
+                ],
+            )
+
+            self._run_build_tables(run_dir)
+
+            _, layer_rows = self._read_csv(run_dir / "tables" / "B_quant_layer_summary.csv")
+            self.assertEqual(len(layer_rows), 2)
+            layer_by_scheme = {row["scheme"]: row for row in layer_rows}
+            self.assertEqual(sorted(layer_by_scheme), ["scheme_err", "scheme_ok"])
+
+            layer_ok = layer_by_scheme["scheme_ok"]
+            self.assertAlmostEqual(float(layer_ok["w_rel_fro__median"]), 0.1)
+            self.assertAlmostEqual(float(layer_ok["w_rel_max__median"]), 0.2)
+
+            layer_err = layer_by_scheme["scheme_err"]
+            self.assertEqual(layer_err["w_rel_fro__median"], "")
+            self.assertEqual(layer_err["w_rel_max__median"], "")
+            self.assertEqual(layer_err["scale_mean__median"], "")
+
+            _, block4_rows = self._read_csv(run_dir / "tables" / "B_quant_block4_summary.csv")
+            self.assertEqual(len(block4_rows), 2)
+            block4_by_scheme = {row["scheme"]: row for row in block4_rows}
+            self.assertEqual(sorted(block4_by_scheme), ["scheme_err", "scheme_ok"])
+
+            block4_ok = block4_by_scheme["scheme_ok"]
+            self.assertAlmostEqual(float(block4_ok["w_rel_fro__median"]), 0.1)
+            self.assertAlmostEqual(float(block4_ok["w_rel_max__median"]), 0.2)
+
+            block4_err = block4_by_scheme["scheme_err"]
+            self.assertEqual(block4_err["w_rel_fro__median"], "")
+            self.assertEqual(block4_err["w_rel_max__median"], "")
+            self.assertEqual(block4_err["scale_mean__median"], "")
+
+            _, rows = self._read_csv(run_dir / "tables" / "B_quant_global_summary.csv")
+            self.assertEqual(len(rows), 2)
+            by_scheme = {row["scheme"]: row for row in rows}
+            self.assertEqual(sorted(by_scheme), ["scheme_err", "scheme_ok"])
+
+            ok = by_scheme["scheme_ok"]
+            self.assertAlmostEqual(float(ok["w_rel_fro__median"]), 0.1)
+            self.assertAlmostEqual(float(ok["w_rel_max__median"]), 0.2)
+
+            err = by_scheme["scheme_err"]
+            self.assertEqual(err["w_rel_fro__median"], "")
+            self.assertEqual(err["w_rel_max__median"], "")
+            self.assertEqual(err["scale_mean__median"], "")
+
+    def test_build_tables_layer_and_scheme_row_order_is_deterministic_for_plotting(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, output_format="csv", compression=None)
+
+            self._write_matrix_stats_csv(
+                data_dir,
+                [
+                    {
+                        "layer": 1,
+                        "proj": "z_proj",
+                        "mean": 1.0,
+                        "std": 0.1,
+                        "mean_abs": 1.0,
+                        "rms": 1.0,
+                        "max_abs": 1.2,
+                        "p50_abs": 1.0,
+                        "p99_abs": 1.2,
+                        "p999_abs": 1.2,
+                        "outlier_max_over_mean": 1.2,
+                        "outlier_p99_over_median": 1.2,
+                        "outlier_p999_over_median": 1.2,
+                    },
+                    {
+                        "layer": 0,
+                        "proj": "b_proj",
+                        "mean": 2.0,
+                        "std": 0.2,
+                        "mean_abs": 2.0,
+                        "rms": 2.0,
+                        "max_abs": 2.2,
+                        "p50_abs": 2.0,
+                        "p99_abs": 2.2,
+                        "p999_abs": 2.2,
+                        "outlier_max_over_mean": 1.1,
+                        "outlier_p99_over_median": 1.1,
+                        "outlier_p999_over_median": 1.1,
+                    },
+                    {
+                        "layer": 0,
+                        "proj": "a_proj",
+                        "mean": 3.0,
+                        "std": 0.3,
+                        "mean_abs": 3.0,
+                        "rms": 3.0,
+                        "max_abs": 3.3,
+                        "p50_abs": 3.0,
+                        "p99_abs": 3.3,
+                        "p999_abs": 3.3,
+                        "outlier_max_over_mean": 1.1,
+                        "outlier_p99_over_median": 1.1,
+                        "outlier_p999_over_median": 1.1,
+                    },
+                ],
+            )
+
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.1.experts.0.z_proj.weight",
+                        "layer": 1,
+                        "proj": "z_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_b",
+                        "w_rel_fro": 0.11,
+                        "w_rel_max": 0.16,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        "derived_tensor": "layers.0.experts.0.a_proj.weight",
+                        "layer": 0,
+                        "proj": "a_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_b",
+                        "w_rel_fro": 0.21,
+                        "w_rel_max": 0.26,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        "derived_tensor": "layers.0.experts.0.a_proj.weight",
+                        "layer": 0,
+                        "proj": "a_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.20,
+                        "w_rel_max": 0.25,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        "derived_tensor": "layers.0.experts.0.b_proj.weight",
+                        "layer": 0,
+                        "proj": "b_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.30,
+                        "w_rel_max": 0.35,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                ],
+            )
+
+            self._run_build_tables(run_dir)
+
+            _, a_layer_rows = self._read_csv(run_dir / "tables" / "A_weight_layer_summary.csv")
+            a_layer_order = [(int(row["layer"]), row["proj"]) for row in a_layer_rows]
+            self.assertEqual(
+                a_layer_order,
+                [(0, "a_proj"), (0, "b_proj"), (1, "z_proj")],
+            )
+
+            _, b_layer_rows = self._read_csv(run_dir / "tables" / "B_quant_layer_summary.csv")
+            b_layer_order = [(int(row["layer"]), row["proj"], row["scheme"]) for row in b_layer_rows]
+            self.assertEqual(
+                b_layer_order,
+                [
+                    (0, "a_proj", "scheme_a"),
+                    (0, "a_proj", "scheme_b"),
+                    (0, "b_proj", "scheme_a"),
+                    (1, "z_proj", "scheme_b"),
+                ],
+            )
+
+    def test_build_tables_axis_keys_remain_parseable_with_missing_quant_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, output_format="csv", compression=None)
+
+            self._write_matrix_stats_csv(
+                data_dir,
+                [
+                    {
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "mean": 1.0,
+                        "std": 0.1,
+                        "mean_abs": 1.0,
+                        "rms": 1.0,
+                        "max_abs": 1.2,
+                        "p50_abs": 1.0,
+                        "p99_abs": 1.2,
+                        "p999_abs": 1.2,
+                        "outlier_max_over_mean": 1.2,
+                        "outlier_p99_over_median": 1.2,
+                        "outlier_p999_over_median": 1.2,
+                    },
+                    {
+                        "layer": 4,
+                        "proj": "down_proj",
+                        "mean": 2.0,
+                        "std": 0.2,
+                        "mean_abs": 2.0,
+                        "rms": 2.0,
+                        "max_abs": 2.2,
+                        "p50_abs": 2.0,
+                        "p99_abs": 2.2,
+                        "p999_abs": 2.2,
+                        "outlier_max_over_mean": 1.1,
+                        "outlier_p99_over_median": 1.1,
+                        "outlier_p999_over_median": 1.1,
+                    },
+                ],
+            )
+
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_ok",
+                        "w_rel_fro": 0.10,
+                        "w_rel_max": 0.20,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        "derived_tensor": "layers.4.experts.0.down_proj.weight",
+                        "layer": 4,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_err",
+                        "w_rel_fro": None,
+                        "w_rel_max": None,
+                        "scale_mean": None,
+                        "scale_max": None,
+                        "bias_mean": None,
+                        "bias_max": None,
+                        "error": "RuntimeError: stub quantize fail",
+                    },
+                ],
+            )
+
+            self._run_build_tables(run_dir)
+
+            _, a_layer_rows = self._read_csv(run_dir / "tables" / "A_weight_layer_summary.csv")
+            parsed_a_layers = [int(row["layer"]) for row in a_layer_rows]
+            self.assertEqual(sorted(parsed_a_layers), [0, 4])
+
+            _, a_block4_rows = self._read_csv(run_dir / "tables" / "A_weight_block4_summary.csv")
+            parsed_a_block4 = [int(row["block4"]) for row in a_block4_rows]
+            self.assertEqual(sorted(parsed_a_block4), [0, 1])
+
+            _, b_layer_rows = self._read_csv(run_dir / "tables" / "B_quant_layer_summary.csv")
+            parsed_b_layers = [int(row["layer"]) for row in b_layer_rows]
+            self.assertEqual(sorted(parsed_b_layers), [0, 4])
+            by_scheme = {row["scheme"]: row for row in b_layer_rows}
+            self.assertEqual(by_scheme["scheme_err"]["w_rel_fro__median"], "")
+            self.assertEqual(by_scheme["scheme_err"]["w_rel_max__median"], "")
+
+            _, b_block4_rows = self._read_csv(run_dir / "tables" / "B_quant_block4_summary.csv")
+            parsed_b_block4 = [int(row["block4"]) for row in b_block4_rows]
+            self.assertEqual(sorted(parsed_b_block4), [0, 1])
+            block4_by_scheme = {row["scheme"]: row for row in b_block4_rows}
+            self.assertEqual(block4_by_scheme["scheme_err"]["w_rel_fro__median"], "")
+            self.assertEqual(block4_by_scheme["scheme_err"]["w_rel_max__median"], "")
+
+
+if __name__ == "__main__":
+    unittest.main()

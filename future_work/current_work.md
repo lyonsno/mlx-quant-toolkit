@@ -9,6 +9,12 @@ Planned Changes
 - Add CLI entry point to `main.py` and remove placeholder.
 - Add license file.
 - Modify `pyproject.toml` to canonicalize optional deps.
+- Defer plotting ingestion wiring until hardening is complete:
+  - We now have `scripts/plot_inputs.py::normalize_plot_axis_columns(df, axis_columns=("layer", "block4"))`
+    with contract tests in `tests/test_plot_inputs_contract.py`.
+  - Next plotting-stage step (deferred): apply this normalization at the single table-ingestion boundary
+    (manifest-driven artifact discovery/load path) so all plotting consumers get stable nullable-int axis dtypes
+    without per-plot duplication.
 
 Open Questions
 

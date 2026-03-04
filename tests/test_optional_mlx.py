@@ -742,6 +742,40 @@ class OptionalMlxPipelineTests(unittest.TestCase):
                 "tables/B_quant_global_summary.csv",
             )
 
+    def test_build_tables_parquet_fallback_manifest_drives_table_artifact_discovery(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            self._probe_parquet_engine()
+            run_dir = Path(tmp_dir) / "run"
+            self._write_manual_build_tables_inputs(
+                run_dir,
+                output_format="parquet",
+                compression="invalid-codec",
+            )
+            self._run_build_tables(run_dir)
+
+            expected = self._expected_table_artifacts()
+            # Poison-pill: if discovery ignores manifest metadata and uses legacy extension scan,
+            # these stale parquet files would be incorrectly selected for plotting.
+            for name in expected:
+                (run_dir / "tables" / f"{name}.parquet").write_text("not real parquet")
+
+            table_artifacts = self._load_module(
+                "table_artifacts",
+                self.repo_root / "scripts" / "table_artifacts.py",
+            )
+            discovered = table_artifacts.discover_table_artifacts(run_dir, expected)
+
+            self.assertEqual(sorted(discovered), sorted(expected))
+            for name in expected:
+                entry = discovered[name]
+                self.assertEqual(entry["source"], "manifest")
+                self.assertEqual(entry["path"], f"tables/{name}.csv")
+                self.assertEqual(entry["format"], "csv")
+                self.assertTrue(entry["fallback"])
+                self.assertIsInstance(entry["error"], str)
+                self.assertTrue(entry["error"])
+                self.assertGreater(entry["rows"], 0)
+
     def test_build_tables_parquet_success_tables_manifest_marks_non_fallback(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             self._probe_parquet_engine()
@@ -785,6 +819,70 @@ class OptionalMlxPipelineTests(unittest.TestCase):
 
             artifact_paths = [artifacts[name]["path"] for name in expected]
             self.assertEqual(len(artifact_paths), len(set(artifact_paths)))
+
+    def test_build_tables_manifest_artifact_discovery_preserves_plot_axis_sequence(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            self._write_manual_build_tables_inputs(
+                run_dir,
+                output_format="csv",
+                compression=None,
+            )
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            with matrix_path.open(newline="") as handle:
+                matrix_reader = csv.DictReader(handle)
+                matrix_rows = list(matrix_reader)
+                matrix_cols = list(matrix_reader.fieldnames or [])
+            with matrix_path.open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=matrix_cols)
+                writer.writeheader()
+                writer.writerows([matrix_rows[1], matrix_rows[0]])
+
+            quant_path = run_dir / "data" / "quant_sim.csv"
+            with quant_path.open(newline="") as handle:
+                quant_reader = csv.DictReader(handle)
+                quant_rows = list(quant_reader)
+                quant_cols = list(quant_reader.fieldnames or [])
+            with quant_path.open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=quant_cols)
+                writer.writeheader()
+                writer.writerows([quant_rows[3], quant_rows[1], quant_rows[0], quant_rows[2]])
+
+            self._run_build_tables(run_dir)
+
+            expected = self._expected_table_artifacts()
+            # Poison-pill: if discovery ignores manifest metadata, legacy scan would prefer parquet.
+            for name in expected:
+                (run_dir / "tables" / f"{name}.parquet").write_text("not real parquet")
+
+            table_artifacts = self._load_module(
+                "table_artifacts",
+                self.repo_root / "scripts" / "table_artifacts.py",
+            )
+            discovered = table_artifacts.discover_table_artifacts(run_dir, expected)
+            self.assertEqual(sorted(discovered), sorted(expected))
+
+            a_entry = discovered["A_weight_layer_summary"]
+            self.assertEqual(a_entry["source"], "manifest")
+            self.assertEqual(a_entry["path"], "tables/A_weight_layer_summary.csv")
+            a_path = run_dir / a_entry["path"]
+            with a_path.open(newline="") as handle:
+                a_rows = list(csv.DictReader(handle))
+            self.assertEqual(a_entry["rows"], len(a_rows))
+            self.assertEqual([int(row["layer"]) for row in a_rows], [0, 1])
+
+            b_entry = discovered["B_quant_layer_summary"]
+            self.assertEqual(b_entry["source"], "manifest")
+            self.assertEqual(b_entry["path"], "tables/B_quant_layer_summary.csv")
+            b_path = run_dir / b_entry["path"]
+            with b_path.open(newline="") as handle:
+                b_rows = list(csv.DictReader(handle))
+            self.assertEqual(b_entry["rows"], len(b_rows))
+            self.assertEqual(
+                [(int(row["layer"]), row["scheme"]) for row in b_rows],
+                [(0, "scheme_a"), (0, "scheme_b"), (1, "scheme_a"), (1, "scheme_b")],
+            )
 
     def test_build_tables_writes_tables_manifest_without_touching_collect_manifest(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
