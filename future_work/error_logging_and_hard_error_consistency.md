@@ -148,10 +148,8 @@ Then align:
 - test expectations in `tests/test_safetensors_index_integration.py`,
 - README config docs.
 
-### 3) (Optional) Improve `build_tables.py` auditability
-If we care about reproducibility for tables:
-- add a `logs/tables_write_manifest.json` (or similar) for `build_tables.py`, recording format fallbacks and output paths,
-  or at least print a warning when parquet write falls back to CSV.
+### 3) `build_tables.py` auditability (handled)
+This is now implemented via `logs/tables_write_manifest.json`, including fallback and output-path metadata.
 
 ---
 
@@ -159,5 +157,3 @@ If we care about reproducibility for tables:
 
 1) Choose `strict_index` contract (this unblocks test alignment).
 2) Add failure artifact emission for `collect_data.py` (most value for “auditability when things go wrong”).
-3) Decide whether tables need a manifest (only if tables generation is a first-class pipeline stage).
-
