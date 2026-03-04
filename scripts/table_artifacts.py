@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
+_TABLE_FILE_SUFFIXES = {".csv", ".parquet"}
+
 
 DEFAULT_TABLE_ARTIFACT_KEYS = [
     "A_weight_layer_summary",
@@ -55,13 +57,23 @@ def _normalize_manifest_entry(entry: Dict[str, Any], run_dir: Path) -> Dict[str,
     path_obj = Path(path_text)
     abs_path = path_obj if path_obj.is_absolute() else (run_dir / path_obj)
     rel_path = _to_rel_path(abs_path, run_dir)
+    rel_path_obj = Path(rel_path)
+    rel_path_posix = rel_path_obj.as_posix()
 
     # Reject manifest paths that resolve outside run_dir.
-    if Path(rel_path).is_absolute() or rel_path in {"", "."}:
+    if rel_path_obj.is_absolute() or rel_path_posix in {"", "."}:
+        return None
+
+    # Accept only table files under run_dir/tables in supported formats.
+    if not rel_path_posix.startswith("tables/"):
+        return None
+    if rel_path_obj.suffix.lower() not in _TABLE_FILE_SUFFIXES:
+        return None
+    if not abs_path.is_file():
         return None
 
     return {
-        "path": rel_path,
+        "path": rel_path_posix,
         "format": str(entry.get("format", "")),
         "fallback": bool(entry.get("fallback", False)),
         "error": str(entry.get("error", "")),
@@ -109,7 +121,7 @@ def discover_table_artifacts(
         manifest_entry = manifest_artifacts.get(artifact_key)
         if isinstance(manifest_entry, dict):
             normalized = _normalize_manifest_entry(manifest_entry, run_dir)
-            if normalized is not None and (run_dir / normalized["path"]).exists():
+            if normalized is not None:
                 discovered[artifact_key] = normalized
                 continue
 

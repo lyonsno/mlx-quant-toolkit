@@ -275,6 +275,65 @@ class TablesArtifactHelperContractTests(unittest.TestCase):
             self.assertEqual(discovered["B_quant_global_summary"]["source"], "legacy_scan")
             self.assertEqual(discovered["B_quant_global_summary"]["path"], "tables/B_quant_global_summary.csv")
 
+    def test_discover_table_artifacts_rejects_manifest_non_table_targets(self):
+        mod = _load_module("table_artifacts", self.scripts_dir / "table_artifacts.py")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            expected = ["A_weight_global_summary", "B_quant_global_summary", "B_quant_deltas"]
+
+            # Valid legacy table artifacts that should be selected when manifest entries are invalid.
+            self._write_file(run_dir / "tables" / "A_weight_global_summary.csv", "col\n1\n")
+            self._write_file(run_dir / "tables" / "B_quant_global_summary.parquet", "col\n2\n")
+            self._write_file(run_dir / "tables" / "B_quant_deltas.csv", "col\n3\n")
+
+            # Poison-pill paths that exist but are not valid table artifact files.
+            self._write_file(run_dir / "data" / "poison.csv", "col\n99\n")  # outside tables/
+            self._write_file(run_dir / "tables" / "B_quant_deltas.json", '{"x": 1}\n')  # wrong extension
+            (run_dir / "tables").mkdir(parents=True, exist_ok=True)  # directory path target
+
+            manifest = {
+                "artifacts": {
+                    "A_weight_global_summary": {
+                        "path": "data/poison.csv",
+                        "format": "csv",
+                        "fallback": False,
+                        "error": "",
+                        "rows": 99,
+                    },
+                    "B_quant_global_summary": {
+                        "path": "tables",
+                        "format": "csv",
+                        "fallback": False,
+                        "error": "",
+                        "rows": 0,
+                    },
+                    "B_quant_deltas": {
+                        "path": "tables/B_quant_deltas.json",
+                        "format": "json",
+                        "fallback": False,
+                        "error": "",
+                        "rows": 1,
+                    },
+                }
+            }
+            manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest, indent=2))
+
+            discovered = mod.discover_table_artifacts(run_dir, expected)
+
+            self.assertEqual(sorted(discovered), sorted(expected))
+            self.assertEqual(discovered["A_weight_global_summary"]["source"], "legacy_scan")
+            self.assertEqual(discovered["A_weight_global_summary"]["path"], "tables/A_weight_global_summary.csv")
+            self.assertEqual(discovered["B_quant_global_summary"]["source"], "legacy_scan")
+            self.assertEqual(
+                discovered["B_quant_global_summary"]["path"],
+                "tables/B_quant_global_summary.parquet",
+            )
+            self.assertEqual(discovered["B_quant_deltas"]["source"], "legacy_scan")
+            self.assertEqual(discovered["B_quant_deltas"]["path"], "tables/B_quant_deltas.csv")
+
 
 if __name__ == "__main__":
     unittest.main()
