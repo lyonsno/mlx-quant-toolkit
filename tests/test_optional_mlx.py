@@ -1,5 +1,6 @@
 import csv
 import io
+import importlib.util
 import json
 import os
 import subprocess
@@ -10,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 
 class OptionalMlxPipelineTests(unittest.TestCase):
@@ -59,6 +61,209 @@ class OptionalMlxPipelineTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+
+    def _write_manual_build_tables_inputs(
+        self,
+        run_dir: Path,
+        *,
+        output_format: str,
+        compression,
+        include_deltas: bool = False,
+    ):
+        data_dir = run_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        cfg = {
+            "output": {"format": output_format, "compression": compression},
+            "delta_pairs": (
+                [{"name": "delta_ab", "a": "scheme_a", "b": "scheme_b"}]
+                if include_deltas
+                else []
+            ),
+        }
+        (run_dir / "analysis_config.json").write_text(json.dumps(cfg, indent=2))
+
+        matrix_cols = [
+            "layer",
+            "proj",
+            "mean",
+            "std",
+            "mean_abs",
+            "rms",
+            "max_abs",
+            "p50_abs",
+            "p99_abs",
+            "p999_abs",
+            "outlier_max_over_mean",
+            "outlier_p99_over_median",
+            "outlier_p999_over_median",
+        ]
+        with (data_dir / "matrix_stats.csv").open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=matrix_cols)
+            writer.writeheader()
+            writer.writerows(
+                [
+                    {
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "mean": 1.0,
+                        "std": 0.1,
+                        "mean_abs": 1.0,
+                        "rms": 1.0,
+                        "max_abs": 1.2,
+                        "p50_abs": 1.0,
+                        "p99_abs": 1.2,
+                        "p999_abs": 1.2,
+                        "outlier_max_over_mean": 1.2,
+                        "outlier_p99_over_median": 1.2,
+                        "outlier_p999_over_median": 1.2,
+                    },
+                    {
+                        "layer": 1,
+                        "proj": "down_proj",
+                        "mean": 2.0,
+                        "std": 0.2,
+                        "mean_abs": 2.0,
+                        "rms": 2.0,
+                        "max_abs": 2.2,
+                        "p50_abs": 2.0,
+                        "p99_abs": 2.2,
+                        "p999_abs": 2.2,
+                        "outlier_max_over_mean": 1.1,
+                        "outlier_p99_over_median": 1.1,
+                        "outlier_p999_over_median": 1.1,
+                    },
+                ]
+            )
+
+        quant_cols = [
+            "derived_tensor",
+            "layer",
+            "proj",
+            "expert_id",
+            "rows",
+            "cols",
+            "scheme",
+            "w_rel_fro",
+            "w_rel_max",
+            "scale_mean",
+            "scale_max",
+            "bias_mean",
+            "bias_max",
+        ]
+        with (data_dir / "quant_sim.csv").open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=quant_cols)
+            writer.writeheader()
+            writer.writerows(
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.10,
+                        "w_rel_max": 0.15,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                    },
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_b",
+                        "w_rel_fro": 0.20,
+                        "w_rel_max": 0.25,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                    },
+                    {
+                        "derived_tensor": "layers.1.experts.0.down_proj.weight",
+                        "layer": 1,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.30,
+                        "w_rel_max": 0.35,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                    },
+                    {
+                        "derived_tensor": "layers.1.experts.0.down_proj.weight",
+                        "layer": 1,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_b",
+                        "w_rel_fro": 0.40,
+                        "w_rel_max": 0.45,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                    },
+                ]
+            )
+
+    def _run_build_tables(self, run_dir: Path):
+        env = os.environ.copy()
+        env["PYTHONWARNINGS"] = "default"
+        result = self._run(
+            [
+                sys.executable,
+                str(self.repo_root / "scripts" / "build_tables.py"),
+                "--run-dir",
+                str(run_dir),
+            ],
+            env=env,
+            check=False,
+        )
+        output = (result.stdout or "") + (result.stderr or "")
+        self.assertEqual(result.returncode, 0, f"build_tables failed: {output}")
+        return result
+
+    def _expected_table_artifacts(self, include_deltas: bool = False):
+        keys = [
+            "A_weight_layer_summary",
+            "A_weight_block4_summary",
+            "A_weight_global_summary",
+            "B_quant_layer_summary",
+            "B_quant_block4_summary",
+            "B_quant_global_summary",
+        ]
+        if include_deltas:
+            keys.append("B_quant_deltas")
+        return keys
+
+    def _probe_parquet_engine(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            probe_path = Path(tmp_dir) / "probe.parquet"
+            try:
+                pd.DataFrame({"x": [1]}).to_parquet(probe_path, index=False, compression=None)
+            except Exception as exc:
+                self.skipTest(f"parquet engine unavailable: {exc}")
+
+    def _load_module(self, module_name: str, path: Path):
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Unable to load module from {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
 
     def _setup_and_collect(
         self,
@@ -437,6 +642,261 @@ class OptionalMlxPipelineTests(unittest.TestCase):
             self.assertEqual(len(global_rows), 2)
             scheme_a = next(row for row in global_rows if row["scheme"] == "scheme_a")
             self.assertAlmostEqual(float(scheme_a["w_rel_fro__median"]), 0.15)
+
+    def test_build_tables_parquet_fallback_writes_tables_manifest_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            self._probe_parquet_engine()
+            run_dir = Path(tmp_dir) / "run"
+            self._write_manual_build_tables_inputs(
+                run_dir,
+                output_format="parquet",
+                compression="invalid-codec",
+            )
+            self._run_build_tables(run_dir)
+
+            manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+            self.assertTrue(manifest_path.exists())
+            write_manifest = json.loads(manifest_path.read_text())
+            self.assertIn("generated_at", write_manifest)
+            self.assertEqual(write_manifest.get("requested_format"), "parquet")
+            self.assertEqual(write_manifest.get("requested_compression"), "invalid-codec")
+
+            artifacts = write_manifest.get("artifacts", {})
+            expected = self._expected_table_artifacts()
+            self.assertEqual(sorted(artifacts), sorted(expected))
+
+            expected_rows = {
+                "A_weight_layer_summary": 2,
+                "A_weight_block4_summary": 1,
+                "A_weight_global_summary": 1,
+                "B_quant_layer_summary": 4,
+                "B_quant_block4_summary": 2,
+                "B_quant_global_summary": 2,
+            }
+            for name in expected:
+                meta = artifacts[name]
+                self.assertEqual(meta.get("format"), "csv")
+                self.assertTrue(meta.get("fallback"))
+                self.assertIsInstance(meta.get("error"), str)
+                self.assertTrue(meta.get("error"))
+                rel_path = meta.get("path")
+                self.assertIsInstance(rel_path, str)
+                self.assertEqual(rel_path, f"tables/{name}.csv")
+                csv_path = run_dir / rel_path
+                self.assertTrue(csv_path.exists())
+                with csv_path.open(newline="") as handle:
+                    row_count = sum(1 for _ in csv.DictReader(handle))
+                self.assertEqual(row_count, expected_rows[name])
+                self.assertEqual(meta.get("rows"), expected_rows[name])
+
+            artifact_paths = [artifacts[name]["path"] for name in expected]
+            self.assertEqual(len(artifact_paths), len(set(artifact_paths)))
+
+    def test_build_tables_parquet_fallback_manifest_rows_and_aggregates_match_csv_tables_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            self._probe_parquet_engine()
+            run_dir = Path(tmp_dir) / "run"
+            self._write_manual_build_tables_inputs(
+                run_dir,
+                output_format="parquet",
+                compression="invalid-codec",
+            )
+            self._run_build_tables(run_dir)
+
+            manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+            self.assertTrue(manifest_path.exists())
+            write_manifest = json.loads(manifest_path.read_text())
+            artifacts = write_manifest.get("artifacts", {})
+            expected = self._expected_table_artifacts()
+            self.assertEqual(sorted(artifacts), sorted(expected))
+
+            with (run_dir / "tables" / "A_weight_global_summary.csv").open(newline="") as handle:
+                a_global_rows = list(csv.DictReader(handle))
+            self.assertEqual(len(a_global_rows), 1)
+            self.assertEqual(a_global_rows[0]["proj"], "down_proj")
+            self.assertAlmostEqual(float(a_global_rows[0]["mean__median"]), 1.5)
+            self.assertAlmostEqual(float(a_global_rows[0]["max_abs__p99"]), 2.19, places=2)
+            self.assertEqual(
+                artifacts["A_weight_global_summary"]["rows"],
+                len(a_global_rows),
+            )
+            self.assertEqual(
+                artifacts["A_weight_global_summary"]["path"],
+                "tables/A_weight_global_summary.csv",
+            )
+
+            with (run_dir / "tables" / "B_quant_global_summary.csv").open(newline="") as handle:
+                b_global_rows = list(csv.DictReader(handle))
+            self.assertEqual(len(b_global_rows), 2)
+            per_scheme = {row["scheme"]: row for row in b_global_rows}
+            self.assertEqual(sorted(per_scheme), ["scheme_a", "scheme_b"])
+            self.assertAlmostEqual(float(per_scheme["scheme_a"]["w_rel_fro__median"]), 0.2)
+            self.assertAlmostEqual(float(per_scheme["scheme_b"]["w_rel_fro__median"]), 0.3)
+            self.assertAlmostEqual(float(per_scheme["scheme_b"]["w_rel_max__max"]), 0.45)
+            self.assertEqual(
+                artifacts["B_quant_global_summary"]["rows"],
+                len(b_global_rows),
+            )
+            self.assertEqual(
+                artifacts["B_quant_global_summary"]["path"],
+                "tables/B_quant_global_summary.csv",
+            )
+
+    def test_build_tables_parquet_success_tables_manifest_marks_non_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            self._probe_parquet_engine()
+
+            run_dir = Path(tmp_dir) / "run"
+            self._write_manual_build_tables_inputs(
+                run_dir,
+                output_format="parquet",
+                compression=None,
+            )
+            self._run_build_tables(run_dir)
+
+            manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+            self.assertTrue(manifest_path.exists())
+            write_manifest = json.loads(manifest_path.read_text())
+            artifacts = write_manifest.get("artifacts", {})
+            expected = self._expected_table_artifacts()
+            self.assertEqual(sorted(artifacts), sorted(expected))
+
+            expected_rows = {
+                "A_weight_layer_summary": 2,
+                "A_weight_block4_summary": 1,
+                "A_weight_global_summary": 1,
+                "B_quant_layer_summary": 4,
+                "B_quant_block4_summary": 2,
+                "B_quant_global_summary": 2,
+            }
+            for name in expected:
+                meta = artifacts[name]
+                self.assertEqual(meta.get("format"), "parquet")
+                self.assertFalse(meta.get("fallback"))
+                self.assertEqual(meta.get("error"), "")
+                rel_path = meta.get("path")
+                self.assertIsInstance(rel_path, str)
+                self.assertEqual(rel_path, f"tables/{name}.parquet")
+                parquet_path = run_dir / rel_path
+                self.assertTrue(parquet_path.exists())
+                table_rows = pd.read_parquet(parquet_path)
+                self.assertEqual(len(table_rows), expected_rows[name])
+                self.assertEqual(meta.get("rows"), expected_rows[name])
+
+            artifact_paths = [artifacts[name]["path"] for name in expected]
+            self.assertEqual(len(artifact_paths), len(set(artifact_paths)))
+
+    def test_build_tables_writes_tables_manifest_without_touching_collect_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            self._write_manual_build_tables_inputs(
+                run_dir,
+                output_format="csv",
+                compression=None,
+            )
+
+            collect_manifest_path = run_dir / "logs" / "write_manifest.json"
+            collect_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            collect_manifest = {"stage": "collect", "sentinel": 123}
+            collect_manifest_path.write_text(json.dumps(collect_manifest, indent=2))
+
+            self._run_build_tables(run_dir)
+
+            self.assertEqual(
+                json.loads(collect_manifest_path.read_text()),
+                collect_manifest,
+            )
+            tables_manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+            self.assertTrue(tables_manifest_path.exists())
+            tables_manifest = json.loads(tables_manifest_path.read_text())
+            self.assertEqual(tables_manifest.get("requested_format"), "csv")
+            self.assertIsNone(tables_manifest.get("requested_compression"))
+
+    def test_build_tables_parquet_fallback_tables_manifest_includes_delta_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            self._probe_parquet_engine()
+            run_dir = Path(tmp_dir) / "run"
+            self._write_manual_build_tables_inputs(
+                run_dir,
+                output_format="parquet",
+                compression="invalid-codec",
+                include_deltas=True,
+            )
+            self._run_build_tables(run_dir)
+
+            manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+            self.assertTrue(manifest_path.exists())
+            write_manifest = json.loads(manifest_path.read_text())
+            artifacts = write_manifest.get("artifacts", {})
+            expected = self._expected_table_artifacts(include_deltas=True)
+            self.assertEqual(sorted(artifacts), sorted(expected))
+
+            deltas_meta = artifacts["B_quant_deltas"]
+            self.assertEqual(deltas_meta.get("format"), "csv")
+            self.assertTrue(deltas_meta.get("fallback"))
+            self.assertIsInstance(deltas_meta.get("error"), str)
+            self.assertTrue(deltas_meta.get("error"))
+            self.assertEqual(deltas_meta.get("path"), "tables/B_quant_deltas.csv")
+            deltas_path = run_dir / "tables" / "B_quant_deltas.csv"
+            self.assertTrue(deltas_path.exists())
+            with deltas_path.open(newline="") as handle:
+                delta_rows = list(csv.DictReader(handle))
+            self.assertEqual(len(delta_rows), 2)
+            self.assertEqual(deltas_meta.get("rows"), len(delta_rows))
+
+    def test_build_tables_parquet_success_tables_manifest_includes_delta_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            self._probe_parquet_engine()
+            run_dir = Path(tmp_dir) / "run"
+            self._write_manual_build_tables_inputs(
+                run_dir,
+                output_format="parquet",
+                compression=None,
+                include_deltas=True,
+            )
+            self._run_build_tables(run_dir)
+
+            manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+            self.assertTrue(manifest_path.exists())
+            write_manifest = json.loads(manifest_path.read_text())
+            artifacts = write_manifest.get("artifacts", {})
+            expected = self._expected_table_artifacts(include_deltas=True)
+            self.assertEqual(sorted(artifacts), sorted(expected))
+
+            deltas_meta = artifacts["B_quant_deltas"]
+            self.assertEqual(deltas_meta.get("format"), "parquet")
+            self.assertFalse(deltas_meta.get("fallback"))
+            self.assertEqual(deltas_meta.get("error"), "")
+            self.assertEqual(deltas_meta.get("path"), "tables/B_quant_deltas.parquet")
+            deltas_path = run_dir / "tables" / "B_quant_deltas.parquet"
+            self.assertTrue(deltas_path.exists())
+            delta_rows = pd.read_parquet(deltas_path)
+            self.assertEqual(len(delta_rows), 2)
+            self.assertEqual(deltas_meta.get("rows"), len(delta_rows))
+
+    def test_tables_manifest_discovery_for_legacy_runs_without_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            tables_dir = run_dir / "tables"
+            tables_dir.mkdir(parents=True, exist_ok=True)
+            expected = self._expected_table_artifacts()
+            for name in expected:
+                (tables_dir / f"{name}.csv").write_text("col_a\n1\n")
+
+            tables_manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+            self.assertFalse(tables_manifest_path.exists())
+
+            table_artifacts = self._load_module(
+                "table_artifacts",
+                self.repo_root / "scripts" / "table_artifacts.py",
+            )
+            discovered = table_artifacts.discover_table_artifacts(run_dir, expected)
+            self.assertEqual(sorted(discovered), sorted(expected))
+            for name in expected:
+                entry = discovered[name]
+                self.assertEqual(entry["path"], f"tables/{name}.csv")
+                self.assertEqual(entry["format"], "csv")
+                self.assertEqual(entry["source"], "legacy_scan")
 
     def test_collect_data_with_mlx_quantize_failure_emits_error_message(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -39,7 +39,8 @@ Top-level keys:
 ### Logs (`logs/`)
 - `run_health.json`: scan/extraction/output summary, effective config, example tensor names
 - `run_context.json`: scan plan, index status, CLI overrides
-- `write_manifest.json`: which artifacts were written (paths, row counts, format, fallbacks)
+- `write_manifest.json`: collect-stage artifact writes from `collect_data.py` (paths, row counts, format, fallbacks)
+- `tables_write_manifest.json`: tables-stage artifact writes from `build_tables.py` (paths, row counts, format, fallbacks)
 - `warnings.*` (if any warnings): includes proj canonicalization summaries and index warnings
 - `proj_canonicalization_report.*` (if proj issues): detailed unresolved projection mappings
 - `index_report.json` (if index active): missing/extra shards and tensors
@@ -129,7 +130,7 @@ uv run python -m unittest tests.test_packed_split_strictness  # specific module
 | Fewer extracted rows than expected | Extraction rules not matching | `logs/run_health.json` (fallback counts), `data/unmatched_tensors.*` |
 | Wrong `proj` labels | `proj_aliases` missing or `proj_group` index wrong | `logs/proj_canonicalization_report.*`, warnings |
 | Packed split produces wrong shapes | `splits` don't sum to canonical rows/cols | Inspect `matrix_stats` rows vs expected sizes |
-| Parquet write failures | Missing pyarrow or compression issue | `logs/write_manifest.json` for fallbacks |
+| Parquet write failures | Missing pyarrow or compression issue | `logs/write_manifest.json` (collect stage) and `logs/tables_write_manifest.json` (tables stage) for fallbacks |
 | Index mode not scanning all shards | `model_path` is a file, not a directory | `logs/run_context.json` → `index_used_for_scan` |
 | MLX simulation errors | MLX not installed or scheme invalid | `quant_sim` rows with `error` column populated |
 | Deterministic percentile mismatch | `sample_per_matrix` too small | Set `sample_per_matrix ≥ rows*cols` |

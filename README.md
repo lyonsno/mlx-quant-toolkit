@@ -67,7 +67,8 @@ Optional dependencies (runtime behavior):
   `collect_data.py` will warn and still write `matrix_stats` and `quant_sim` (with zero rows).
 - Parquet writing requires a working Parquet backend (typically `pyarrow`). If Parquet writing fails for any
   reason (missing backend, invalid compression, etc.), the pipeline falls back to CSV and records that fallback
-  in `logs/write_manifest.json`.
+  in stage-specific manifests: `logs/write_manifest.json` for `collect_data.py` outputs and
+  `logs/tables_write_manifest.json` for `build_tables.py` outputs.
 
 ## What the scripts do
 
@@ -81,6 +82,7 @@ Optional dependencies (runtime behavior):
   - Writes auditability logs (`logs/run_health.json`, `logs/run_context.json`, `logs/write_manifest.json`, etc.).
 - `scripts/build_tables.py`
   - Aggregates `matrix_stats` and `quant_sim` into layer/block/global summary tables under `tables/`.
+  - Writes `logs/tables_write_manifest.json` for table artifact write metadata.
 
 ## Configuration (`analysis_config.json`)
 
@@ -207,7 +209,10 @@ The preferred format is controlled by `output.format`:
 `output.compression` is passed to Parquet writers (ignored for CSV).
 
 When Parquet writing fails, the pipeline falls back to CSV for that artifact and records
-the error in `logs/write_manifest.json`.
+the error in the stage-specific write manifest:
+
+- `logs/write_manifest.json` for `collect_data.py` artifacts under `data/` and `logs/`
+- `logs/tables_write_manifest.json` for `build_tables.py` artifacts under `tables/`
 
 ### Metadata options
 
@@ -254,6 +259,7 @@ runs/<model-id>/<run-name>/
     run_context.json                         (written on successful completion of collect_data.py)
     run_health.json                          (written on successful completion of collect_data.py)
     write_manifest.json                      (written on successful completion of collect_data.py)
+    tables_write_manifest.json               (written on successful completion of build_tables.py)
   cache/
     sampled_indices/                         (deterministic sampling cache)
   plots/                                     (created by init_run; reserved for plots)
@@ -279,9 +285,12 @@ Contract-writing blocks in code are tagged with short `CONTRACT SURFACE:` marker
   - index status (`disabled` / `not_found` / `active` / `unavailable` / `error`)
   - index discovery fields (`searched`, `found`, `parsed`, `active`, `used_for_scan`) and the resolved `index_path` (or null)
   - note: `index.index_path` may be set even when `status == "error"` (discovered, but parse failed)
-- `logs/write_manifest.json` records:
+- `logs/write_manifest.json` records (collect stage: `collect_data.py`):
   - requested output settings (`format`, `compression`)
-  - the actual written artifact paths, formats, row counts, and Parquet→CSV fallbacks
+  - the actual written artifact paths, formats, row counts, and Parquet→CSV fallbacks for collect artifacts
+- `logs/tables_write_manifest.json` records (tables stage: `build_tables.py`):
+  - requested output settings (`format`, `compression`)
+  - the actual written table artifact paths, formats, row counts, and Parquet→CSV fallbacks
 - `logs/proj_canonicalization_report.*` (optional) records aggregated unresolved projection
   canonicalization events with counts/examples/suggestions:
   - `context` (`packed_split` or `proj_group`)
@@ -354,7 +363,9 @@ including edge cases, error scenarios, and troubleshooting guidance.
 
 ## Troubleshooting
 
-- Parquet unexpectedly became CSV: check `logs/write_manifest.json` for the fallback `error`.
+- Parquet unexpectedly became CSV:
+  - check `logs/write_manifest.json` for collect-stage fallback `error`
+  - check `logs/tables_write_manifest.json` for tables-stage fallback `error`
 - bfloat16 decode errors: install `ml-dtypes` (NumPy needs it to handle `"bfloat16"` from safetensors).
 - Packed split failures: set `parsing.strict_packed_split=false` to warn + fall back (see `logs/warnings.*`).
 - Proj canonicalization uncertainty: inspect `logs/proj_canonicalization_report.*`; warning summaries point to the exact report path.

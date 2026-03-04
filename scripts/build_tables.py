@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any, Dict, List
@@ -72,19 +73,69 @@ def _read_df(path: Path, empty_columns: List[str] | None = None) -> pd.DataFrame
     raise FileNotFoundError(path)
 
 
-def _write_df(df: pd.DataFrame, path: Path, fmt: str, compression: str | None):
-    # CONTRACT SURFACE: tables/*.parquet|csv Parquet→CSV fallback
-    # No write manifest for tables (ask before adding). Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs.
-    # Tests: rg 'build_tables' tests/
+def _write_json(obj: Any, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(obj, indent=2, sort_keys=True))
+
+
+def _path_for_manifest(path: Path, run_dir: Path) -> str:
+    try:
+        return path.resolve().relative_to(run_dir.resolve()).as_posix()
+    except Exception:
+        return str(path)
+
+
+def _normalize_write_meta(meta: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
+    raw_path = meta.get("path")
+    if isinstance(raw_path, Path):
+        rel_path = _path_for_manifest(raw_path, run_dir)
+    else:
+        rel_path = _path_for_manifest(Path(str(raw_path)), run_dir)
+    return {
+        "path": rel_path,
+        "format": str(meta.get("format", "")),
+        "fallback": bool(meta.get("fallback", False)),
+        "error": str(meta.get("error", "")),
+        "rows": int(meta.get("rows", 0)),
+    }
+
+
+def _write_df(df: pd.DataFrame, path: Path, fmt: str, compression: str | None) -> Dict[str, Any]:
+    # CONTRACT SURFACE: tables/*.parquet|csv Parquet→CSV fallback + logs/tables_write_manifest.json
+    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs.
+    # Tests: rg 'tables_write_manifest|build_tables' tests/
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = int(len(df))
     if fmt == "parquet":
         try:
             df.to_parquet(path, index=False, compression=compression)
-            return
-        except Exception:
-            df.to_csv(path.with_suffix(".csv"), index=False)
-            return
-    df.to_csv(path.with_suffix(".csv"), index=False)
+            return {
+                "path": path,
+                "format": "parquet",
+                "fallback": False,
+                "error": "",
+                "rows": rows,
+            }
+        except Exception as exc:
+            print(f"[warn] parquet write failed ({exc}); falling back to CSV for {path}")
+            csv_path = path.with_suffix(".csv")
+            df.to_csv(csv_path, index=False)
+            return {
+                "path": csv_path,
+                "format": "csv",
+                "fallback": True,
+                "error": f"{type(exc).__name__}: {exc}",
+                "rows": rows,
+            }
+    csv_path = path.with_suffix(".csv")
+    df.to_csv(csv_path, index=False)
+    return {
+        "path": csv_path,
+        "format": "csv",
+        "fallback": False,
+        "error": "",
+        "rows": rows,
+    }
 
 
 def _load_config(run_dir: Path) -> Dict[str, Any]:
@@ -118,6 +169,7 @@ def main():
     cfg = _load_config(run_dir)
     fmt = cfg.get("output", {}).get("format", "parquet")
     compression = cfg.get("output", {}).get("compression", None)
+    write_manifest_artifacts: Dict[str, Dict[str, Any]] = {}
 
     ms = _read_df(
         run_dir / "data" / "matrix_stats.parquet",
@@ -152,21 +204,30 @@ def main():
     # CONTRACT SURFACE: tables/A_weight_layer_summary.{parquet|csv}
     # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
     # Tests: rg 'A_weight_layer_summary' tests/
-    _write_df(A_layer, run_dir / "tables" / "A_weight_layer_summary.parquet", fmt, compression)
+    write_manifest_artifacts["A_weight_layer_summary"] = _normalize_write_meta(
+        _write_df(A_layer, run_dir / "tables" / "A_weight_layer_summary.parquet", fmt, compression),
+        run_dir,
+    )
 
     # per block4/proj
     A_block4 = _agg_with_funcs(ms, ["block4", "proj"], stat_cols, ["median", "mean", "std", p90, p99])
     # CONTRACT SURFACE: tables/A_weight_block4_summary.{parquet|csv}
     # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
     # Tests: rg 'A_weight_block4_summary' tests/
-    _write_df(A_block4, run_dir / "tables" / "A_weight_block4_summary.parquet", fmt, compression)
+    write_manifest_artifacts["A_weight_block4_summary"] = _normalize_write_meta(
+        _write_df(A_block4, run_dir / "tables" / "A_weight_block4_summary.parquet", fmt, compression),
+        run_dir,
+    )
 
     # global/proj
     A_global = _agg_with_funcs(ms, ["proj"], stat_cols, ["min", p01, "median", p99, "max"])
     # CONTRACT SURFACE: tables/A_weight_global_summary.{parquet|csv}
     # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
     # Tests: rg 'A_weight_global_summary' tests/
-    _write_df(A_global, run_dir / "tables" / "A_weight_global_summary.parquet", fmt, compression)
+    write_manifest_artifacts["A_weight_global_summary"] = _normalize_write_meta(
+        _write_df(A_global, run_dir / "tables" / "A_weight_global_summary.parquet", fmt, compression),
+        run_dir,
+    )
 
     # -------- B: quant sim summaries --------
     qcols = ["w_rel_fro", "w_rel_max", "scale_mean", "scale_max", "bias_mean", "bias_max"]
@@ -176,19 +237,28 @@ def main():
     # CONTRACT SURFACE: tables/B_quant_layer_summary.{parquet|csv}
     # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
     # Tests: rg 'B_quant_layer_summary' tests/
-    _write_df(B_layer, run_dir / "tables" / "B_quant_layer_summary.parquet", fmt, compression)
+    write_manifest_artifacts["B_quant_layer_summary"] = _normalize_write_meta(
+        _write_df(B_layer, run_dir / "tables" / "B_quant_layer_summary.parquet", fmt, compression),
+        run_dir,
+    )
 
     B_block4 = _agg_with_funcs(qs, ["block4", "proj", "scheme"], qcols, ["median", "mean", p90, p99])
     # CONTRACT SURFACE: tables/B_quant_block4_summary.{parquet|csv}
     # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
     # Tests: rg 'B_quant_block4_summary' tests/
-    _write_df(B_block4, run_dir / "tables" / "B_quant_block4_summary.parquet", fmt, compression)
+    write_manifest_artifacts["B_quant_block4_summary"] = _normalize_write_meta(
+        _write_df(B_block4, run_dir / "tables" / "B_quant_block4_summary.parquet", fmt, compression),
+        run_dir,
+    )
 
     B_global = _agg_with_funcs(qs, ["proj", "scheme"], qcols, ["min", p01, "median", p99, "max"])
     # CONTRACT SURFACE: tables/B_quant_global_summary.{parquet|csv}
     # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
     # Tests: rg 'B_quant_global_summary' tests/
-    _write_df(B_global, run_dir / "tables" / "B_quant_global_summary.parquet", fmt, compression)
+    write_manifest_artifacts["B_quant_global_summary"] = _normalize_write_meta(
+        _write_df(B_global, run_dir / "tables" / "B_quant_global_summary.parquet", fmt, compression),
+        run_dir,
+    )
 
     # -------- deltas (scheme A - scheme B) --------
     delta_pairs = cfg.get("delta_pairs", [])
@@ -230,7 +300,21 @@ def main():
         # CONTRACT SURFACE: tables/B_quant_deltas.{parquet|csv}
         # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
         # Tests: rg 'B_quant_deltas' tests/
-        _write_df(deltas, run_dir / "tables" / "B_quant_deltas.parquet", fmt, compression)
+        write_manifest_artifacts["B_quant_deltas"] = _normalize_write_meta(
+            _write_df(deltas, run_dir / "tables" / "B_quant_deltas.parquet", fmt, compression),
+            run_dir,
+        )
+
+    tables_write_manifest = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "requested_format": fmt,
+        "requested_compression": compression,
+        "artifacts": write_manifest_artifacts,
+    }
+    # CONTRACT SURFACE: logs/tables_write_manifest.json
+    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+    # Tests: rg 'tables_write_manifest' tests/
+    _write_json(tables_write_manifest, run_dir / "logs" / "tables_write_manifest.json")
 
     print("[build_tables] wrote tables/ A_* and B_*")
 
