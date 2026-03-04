@@ -16,7 +16,7 @@ Top-level keys:
 | `extract_rules` | Array of rule objects (match, ndim, layout, groups, packed_split) | See Core Concepts in navigation_reference.md |
 | `stats` | Sampling and metrics | `sample_per_matrix` (set ≥ rows*cols for deterministic percentiles), `metrics` (mean_abs, max_abs, p99_abs, outlier_ratios) |
 | `mlx` + `quant_schemes` | MLX simulation config (optional) | `enabled`, `schemes` array (name, mode, bits, group_size) |
-| `delta_pairs` | Scheme comparison pairs for `build_tables.py` | `[{"reference": "...", "target": "..."}]` |
+| `delta_pairs` | Scheme comparison pairs for `build_tables.py` | `[{"name": "...", "a": "...", "b": "..."}]` |
 | `output` | Format and compression | `format` ("parquet" or "csv"), `compression` (e.g., "snappy") |
 | `metadata` | Config.json parsing | `enabled`, `config_path`, `mode` (reserved) |
 | `debug` | Diagnostic artifacts | `dump_unmatched_tensors`, `print_progress_every_files` |
