@@ -55,7 +55,7 @@ Key config files:
 
 Run sequence: `init_run` → edit `analysis_config.json` → `collect_data` → `build_tables`.
 
-**Core Concepts**: See `concept_reference.md` for detailed explanations of canonicalization, extraction rules, packed splits, projection canonicalization, and safetensors index support.
+**Core Concepts**: See `quick_concept_reference.md` for detailed explanations of canonicalization, extraction rules, packed splits, projection canonicalization, and safetensors index support.
 
 ---
 
@@ -66,8 +66,8 @@ For understanding specific areas:
 | Area | File(s) |
 |------|---------|
 | Extraction logic | `scripts/collect_extract.py` |
-| Canonical layout handling | `scripts/collect_extract.py` (functions: `canonicalize_tensor`, `apply_packed_split`) |
-| Index discovery/validation | `scripts/collect_io.py` (functions: `discover_safetensors_index`, `validate_index_active`) |
+| Canonical layout handling | `scripts/collect_extract.py` (entrypoint: `_canonicalize_layout`, see definition at line ~190; used by `_apply_rules` for standard + packed-split paths) |
+| Index discovery/validation | `scripts/metadata.py` (functions: `find_safetensors_index_json`, `parse_safetensors_index`) + `scripts/collect_data.py` (index activation/strict-index validation flow) |
 | Statistics computation | `scripts/collect_stats.py` |
 | Reporting/warnings | `scripts/collect_reporting.py` |
 | Table aggregation | `scripts/build_tables.py` |
