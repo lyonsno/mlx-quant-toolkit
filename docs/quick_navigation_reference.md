@@ -37,7 +37,7 @@ custom_mlx_quant_tools/
 Key config files:
 ├── AGENTS.md             # Agent-specific rules (this file is for AI assistants)
 ├── README.md             # User-facing documentation
-├── pyproject.toml        # Dependencies: numpy, pandas, pyarrow, safetensors, mlx, mlx-lm
+├── pyproject.toml        # Base deps: ml-dtypes, numpy, pandas, safetensors; optional extras: parquet (pyarrow), mlx (mlx, mlx-lm)
 └── Makefile              # Test commands: `make test`, `make verbose-test`
 ```
 

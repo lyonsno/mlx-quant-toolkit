@@ -1,14 +1,13 @@
 Remaining Identified Issues
 
 - Hard errors are inconsistently surfaced (SystemExit vs tracebacks) and usually produce no structured failure artifacts. See `future_work/error_logging_and_hard_error_consistency.md`.
-- "Optional" deps are not actually optional yet according to `pyproject.toml`.
+- Optional dependency packaging has been canonicalized in `pyproject.toml` (base deps vs `optional-dependencies` extras).
 
 Planned Changes
 
 - Harden hard-error surfacing to be consistent and produce structured failure artifacts.
 - Add CLI entry point to `main.py` and remove placeholder.
 - Add license file.
-- Modify `pyproject.toml` to canonicalize optional deps.
 - Defer plotting ingestion wiring until hardening is complete:
   - We now have `scripts/plot_inputs.py::normalize_plot_axis_columns(df, axis_columns=("layer", "block4"))`
     with contract tests in `tests/test_plot_inputs_contract.py`.
