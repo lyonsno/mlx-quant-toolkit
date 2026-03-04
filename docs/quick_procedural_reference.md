@@ -151,6 +151,7 @@ uv run python -m unittest tests.test_packed_split_strictness  # specific module
 ## Version & Environment
 
 - Python ≥ 3.12.9
-- Dependencies: `ml-dtypes`, `mlx`, `mlx-lm`, `numpy`, `pandas`, `pyarrow`, `safetensors`
+- Base dependencies: `ml-dtypes`, `numpy`, `pandas`, `safetensors`
+- Optional extras: `mlx` (`mlx`, `mlx-lm`) and `parquet` (`pyarrow`)
 - Uses `uv` for package management (Makefile assumes `.venv/bin/python`)
 - Tests are `unittest`-based, no pytest

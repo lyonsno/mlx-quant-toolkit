@@ -69,6 +69,11 @@ When a user request includes **tests + fix**, use this two-phase flow unless the
 3) **Respect optional dependencies.**
 - `mlx` is optional. The pipeline must still run and write outputs when MLX is unavailable.
 - Tests should avoid requiring real MLX; prefer stubs.
+- Dependency placement contract:
+  - Use required `project.dependencies` only for packages needed by the base pipeline on all installs.
+  - Use `project.optional-dependencies` for capability-specific features that intentionally degrade when unavailable.
+  - Keep extras capability-scoped (e.g. `mlx`, `parquet`, future `plot`) and maintain an `all` union extra.
+  - Any new optional extra should ship with at least one fail-meaningful test covering the missing-dependency path.
 
 4) **Prefer minimal diffs / limited blast radius.**
 - No drive-by refactors unless explicitly requested.

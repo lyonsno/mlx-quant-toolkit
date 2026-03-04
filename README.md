@@ -60,15 +60,24 @@ Common setups:
 
 Optional dependencies (runtime behavior):
 
-- Note: `pyproject.toml` currently includes `mlx` and `pyarrow` as dependencies, but the scripts are written to
-  degrade gracefully when they are unavailable at runtime (for example: running from source without installing
-  the full dependency set, or install failures on unsupported platforms).
+- `pyproject.toml` keeps `mlx` and `pyarrow` as install extras so the base pipeline install stays portable.
+- Install extras when needed:
+  - `uv sync --extra mlx --extra parquet` (or `uv sync --extra all`)
+  - `./.venv/bin/pip install -e ".[mlx,parquet]"` (or `-e ".[all]"`)
 - `mlx` is only required for quantization simulation. If `mlx` is not importable,
   `collect_data.py` will warn and still write `matrix_stats` and `quant_sim` (with zero rows).
 - Parquet writing requires a working Parquet backend (typically `pyarrow`). If Parquet writing fails for any
   reason (missing backend, invalid compression, etc.), the pipeline falls back to CSV and records that fallback
   in stage-specific manifests: `logs/write_manifest.json` for `collect_data.py` outputs and
   `logs/tables_write_manifest.json` for `build_tables.py` outputs.
+
+Dependency policy (for new packages):
+
+- Put a package in `project.dependencies` only if the base pipeline contract requires it on every install path.
+- Put feature-specific packages in `project.optional-dependencies` when behavior is designed to degrade gracefully.
+- Group extras by capability (for example `mlx`, `parquet`, `plot`) and keep an `all` extra as the union.
+- For optional capabilities, require one contract test that proves behavior when the extra is missing (warn/fallback/degraded output).
+- Update this README and quick reference docs whenever dependency policy or extra names change.
 
 ## What the scripts do
 
