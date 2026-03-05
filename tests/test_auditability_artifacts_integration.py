@@ -115,6 +115,7 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
         configured_model_path: Path,
         *,
         use_index: bool,
+        strict_index: bool = False,
         output_format: str,
         compression: str | None,
     ) -> None:
@@ -126,7 +127,7 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
                 "include_shared_expert": True,
                 "inventory_all_tensors": True,
                 "use_safetensors_index_json": use_index,
-                "strict_index": False,
+                "strict_index": strict_index,
                 "max_files": None,
             },
             "parsing": {
@@ -164,6 +165,32 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
         }
         (run_dir / "analysis_config.json").write_text(json.dumps(cfg, indent=2))
 
+    def _assert_run_failure_payload_basics(self, payload: dict, run_dir: Path) -> None:
+        self._assert_required_keys_subset(
+            payload,
+            {"generated_at", "status", "run", "error"},
+            "run_failure",
+        )
+        self.assertEqual(payload.get("status"), "error")
+
+        run_info = payload.get("run", {})
+        self.assertIsInstance(run_info, dict)
+        self.assertEqual(run_info.get("run_dir"), str(run_dir.resolve()))
+
+        error_info = payload.get("error", {})
+        self._assert_required_keys_subset(
+            error_info,
+            {"type", "message"},
+            "run_failure.error",
+        )
+        self.assertIsInstance(error_info.get("type"), str)
+        self.assertTrue(error_info.get("type"))
+        self.assertIsInstance(error_info.get("message"), str)
+        self.assertTrue(error_info.get("message"))
+
+    def _assert_no_run_failure_artifact(self, run_dir: Path) -> None:
+        self.assertFalse((run_dir / "logs" / "run_failure.json").exists())
+
     def test_collect_data_writes_run_context_and_write_manifest_with_cli_override_and_index_active(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -196,6 +223,7 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             )
 
             self._run_collect(run_dir, model_dir, self._env(), check=True)
+            self._assert_no_run_failure_artifact(run_dir)
 
             context_path = run_dir / "logs" / "run_context.json"
             self.assertTrue(context_path.exists())
@@ -327,6 +355,7 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             )
 
             self._run_collect(run_dir, None, self._env(), check=True)
+            self._assert_no_run_failure_artifact(run_dir)
 
             context = json.loads((run_dir / "logs" / "run_context.json").read_text())
             self._assert_required_keys_subset(
@@ -366,6 +395,7 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             )
 
             self._run_collect(run_dir, None, self._env(), check=True)
+            self._assert_no_run_failure_artifact(run_dir)
 
             context = json.loads((run_dir / "logs" / "run_context.json").read_text())
             self._assert_required_keys_subset(
@@ -409,6 +439,7 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             )
 
             self._run_collect(run_dir, None, self._env(), check=True)
+            self._assert_no_run_failure_artifact(run_dir)
 
             context = json.loads((run_dir / "logs" / "run_context.json").read_text())
             self._assert_required_keys_subset(
@@ -484,3 +515,177 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             self.assertEqual(outputs.get("wrote_index_report"), index_report_path.exists())
             self.assertFalse(outputs.get("wrote_index_report"))
             self.assertFalse(index_report_path.exists())
+
+    def test_collect_data_hard_fail_missing_config_writes_run_failure_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            run_dir = tmp_path / "missing-config"
+
+            result = self._run_collect(run_dir, None, self._env(), check=False)
+            self.assertNotEqual(result.returncode, 0)
+
+            failure_path = run_dir / "logs" / "run_failure.json"
+            self.assertTrue(failure_path.exists())
+
+            payload = json.loads(failure_path.read_text())
+            self._assert_run_failure_payload_basics(payload, run_dir)
+
+            error_info = payload.get("error", {})
+            self.assertEqual(error_info.get("type"), "SystemExit")
+            self.assertIn("missing config", str(error_info.get("message")).lower())
+
+            model_path_info = payload.get("model_path", {})
+            self._assert_required_keys_subset(
+                model_path_info,
+                {"configured", "resolved", "source"},
+                "run_failure.model_path",
+            )
+            configured = model_path_info.get("configured")
+            resolved = model_path_info.get("resolved")
+            self.assertTrue(configured is None or isinstance(configured, str))
+            self.assertTrue(resolved is None or isinstance(resolved, str))
+            self.assertTrue(
+                model_path_info.get("source") is None
+                or isinstance(model_path_info.get("source"), str)
+            )
+
+            index_info = payload.get("index", {})
+            self._assert_required_keys_subset(
+                index_info,
+                {"status", "searched", "found", "active", "index_path"},
+                "run_failure.index",
+            )
+            self.assertIsInstance(index_info.get("searched"), bool)
+            self.assertIsInstance(index_info.get("found"), bool)
+            self.assertIsInstance(index_info.get("active"), bool)
+            index_path = index_info.get("index_path")
+            self.assertTrue(index_path is None or isinstance(index_path, str))
+
+    def test_collect_data_hard_fail_strict_index_writes_run_failure_with_index_context(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            np.savez(
+                model_dir / "shard1.npz",
+                **{"layers.0.experts.0.up_proj.weight": np.arange(4, dtype=np.float32).reshape(2, 2)},
+            )
+
+            run_dir = self._init_run_dir(tmp_path, "strict-index-hard-fail")
+            self._write_config(
+                run_dir,
+                model_dir,
+                use_index=True,
+                strict_index=True,
+                output_format="csv",
+                compression=None,
+            )
+
+            result = self._run_collect(run_dir, None, self._env(), check=False)
+            self.assertNotEqual(result.returncode, 0)
+
+            failure_path = run_dir / "logs" / "run_failure.json"
+            self.assertTrue(failure_path.exists())
+
+            payload = json.loads(failure_path.read_text())
+            self._assert_run_failure_payload_basics(payload, run_dir)
+
+            error_info = payload.get("error", {})
+            self.assertEqual(error_info.get("type"), "SystemExit")
+            self.assertIn("strict_index", str(error_info.get("message")).lower())
+            self.assertIn("active index", str(error_info.get("message")).lower())
+
+            index_info = payload.get("index", {})
+            self._assert_required_keys_subset(
+                index_info,
+                {"status", "searched", "found", "active", "index_path"},
+                "run_failure.index",
+            )
+            self.assertEqual(index_info.get("status"), "not_found")
+            self.assertEqual(index_info.get("searched"), True)
+            self.assertEqual(index_info.get("found"), False)
+            self.assertEqual(index_info.get("active"), False)
+            self.assertIsNone(index_info.get("index_path"))
+
+            model_path_info = payload.get("model_path", {})
+            self._assert_required_keys_subset(
+                model_path_info,
+                {"configured", "resolved", "source"},
+                "run_failure.model_path",
+            )
+            self.assertEqual(model_path_info.get("source"), "config")
+            self.assertEqual(
+                Path(model_path_info.get("configured")).resolve(),
+                model_dir.resolve(),
+            )
+            self.assertEqual(
+                Path(model_path_info.get("resolved")).resolve(),
+                model_dir.resolve(),
+            )
+
+    def test_collect_data_hard_fail_bad_npz_writes_exception_traceback_in_run_failure(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            (model_dir / "poison.npz").write_bytes(b"PK\x03\x04bad")
+
+            run_dir = self._init_run_dir(tmp_path, "bad-npz-hard-fail")
+            self._write_config(
+                run_dir,
+                model_dir,
+                use_index=False,
+                output_format="csv",
+                compression=None,
+            )
+
+            result = self._run_collect(run_dir, None, self._env(), check=False)
+            self.assertNotEqual(result.returncode, 0)
+
+            failure_path = run_dir / "logs" / "run_failure.json"
+            self.assertTrue(failure_path.exists())
+
+            payload = json.loads(failure_path.read_text())
+            self._assert_run_failure_payload_basics(payload, run_dir)
+
+            error_info = payload.get("error", {})
+            self.assertEqual(error_info.get("type"), "BadZipFile")
+            self.assertIn("not a zip file", str(error_info.get("message")).lower())
+
+            self.assertIn("traceback", payload)
+            traceback_text = payload.get("traceback")
+            self.assertIsInstance(traceback_text, str)
+            self.assertIn("Traceback (most recent call last):", traceback_text)
+            self.assertIn("BadZipFile", traceback_text)
+
+    def test_collect_data_success_clears_stale_run_failure_artifact_from_prior_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            np.savez(
+                model_dir / "shard1.npz",
+                **{"layers.0.experts.0.up_proj.weight": np.arange(4, dtype=np.float32).reshape(2, 2)},
+            )
+
+            run_name = "stale-failure-then-success"
+            run_dir = tmp_path / run_name
+
+            first_result = self._run_collect(run_dir, None, self._env(), check=False)
+            self.assertNotEqual(first_result.returncode, 0)
+            failure_path = run_dir / "logs" / "run_failure.json"
+            self.assertTrue(failure_path.exists())
+
+            run_dir = self._init_run_dir(tmp_path, run_name)
+            self._write_config(
+                run_dir,
+                model_dir,
+                use_index=False,
+                output_format="csv",
+                compression=None,
+            )
+
+            self._run_collect(run_dir, None, self._env(), check=True)
+
+            self._assert_no_run_failure_artifact(run_dir)
+            self.assertTrue((run_dir / "logs" / "run_context.json").exists())

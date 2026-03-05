@@ -18,6 +18,7 @@ import os
 import re
 import sys
 import time
+import traceback
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -81,6 +82,117 @@ def _artifact_entry(meta: Dict[str, Any], run_dir: Path, rows: int) -> Dict[str,
     elif isinstance(raw_path, str):
         entry["path"] = _path_for_manifest(Path(raw_path), run_dir)
     return entry
+
+
+def _resolve_path_str(path_like: Any) -> Optional[str]:
+    if path_like is None:
+        return None
+    try:
+        return str(Path(path_like).expanduser().resolve())
+    except Exception:
+        return str(path_like)
+
+
+def _system_exit_is_error(exc: SystemExit) -> bool:
+    code = exc.code
+    if code is None:
+        return False
+    if isinstance(code, int):
+        return code != 0
+    return True
+
+
+def _exception_message(exc: BaseException) -> str:
+    if isinstance(exc, SystemExit):
+        code = exc.code
+        if isinstance(code, str):
+            return code
+        if code is None:
+            return "SystemExit"
+        return f"SystemExit({code})"
+    text = str(exc)
+    return text if text else type(exc).__name__
+
+
+def _write_run_failure_artifact(exc: BaseException, ctx: Dict[str, Any]) -> None:
+    run_dir_raw = ctx.get("run_dir")
+    if run_dir_raw is None:
+        return
+
+    run_dir = Path(run_dir_raw)
+    manifest = ctx.get("manifest")
+    manifest_dict = manifest if isinstance(manifest, dict) else {}
+    cli_overrides = ctx.get("cli_overrides")
+    cli_overrides_dict = cli_overrides if isinstance(cli_overrides, dict) else {}
+
+    configured_model_path = ctx.get("configured_model_path")
+    model_path = ctx.get("model_path")
+    model_path_source = None
+    if "model_path" in cli_overrides_dict:
+        model_path_source = "cli_override"
+    elif configured_model_path is not None:
+        model_path_source = "config"
+
+    index_path = ctx.get("index_path")
+    index_path_found = ctx.get("index_path_found")
+    index_context_path = None
+    try:
+        if index_path is not None and Path(index_path).exists():
+            index_context_path = _resolve_path_str(index_path)
+        elif index_path_found is not None and Path(index_path_found).exists():
+            index_context_path = _resolve_path_str(index_path_found)
+    except Exception:
+        index_context_path = _resolve_path_str(index_path) or _resolve_path_str(index_path_found)
+
+    payload: Dict[str, Any] = {
+        "generated_at": _utc_now_iso(),
+        "status": "error",
+        "run": {
+            "run_dir": _resolve_path_str(run_dir),
+            "model_id": manifest_dict.get("model_id"),
+            "run_name": manifest_dict.get("run_name"),
+            "created_at": manifest_dict.get("created_at"),
+        },
+        "model_path": {
+            "configured": _resolve_path_str(configured_model_path),
+            "resolved": _resolve_path_str(model_path),
+            "source": model_path_source,
+        },
+        "cli_overrides": cli_overrides_dict,
+        "index": {
+            "status": str(ctx.get("index_status", "not_initialized")),
+            "searched": bool(ctx.get("index_searched", False)),
+            "found": bool(ctx.get("index_found", False)),
+            "active": bool(ctx.get("index_active", False)),
+            "index_path": index_context_path,
+        },
+        "error": {
+            "type": type(exc).__name__,
+            "message": _exception_message(exc),
+        },
+    }
+
+    index_error = ctx.get("index_error")
+    if index_error:
+        payload["index"]["error"] = str(index_error)
+
+    tb_text = traceback.format_exc()
+    if tb_text and tb_text.strip():
+        payload["traceback"] = tb_text
+
+    try:
+        _write_json(payload, run_dir / "logs" / "run_failure.json")
+    except Exception:
+        # Best effort only: failing to write failure metadata should not replace the original error.
+        pass
+
+
+def _clear_run_failure_artifact(run_dir: Path) -> None:
+    try:
+        (run_dir / "logs" / "run_failure.json").unlink(missing_ok=True)
+    except Exception:
+        # Best effort only: stale failure metadata should not break successful runs.
+        pass
 
 
 def _load_config(run_dir: Path) -> Dict[str, Any]:
@@ -203,19 +315,18 @@ def _mlx_quant_sim(
 
 # ------------------------- main collection -----------------------------------
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--run-dir", required=True)
-    ap.add_argument("--model-path", default=None, help="Override config model_path")
-    args = ap.parse_args()
-
+def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
     run_dir = Path(args.run_dir).expanduser().resolve()
+    failure_ctx["run_dir"] = run_dir
     cfg = _load_config(run_dir)
     manifest = _safe_read_json_dict(run_dir / "manifest.json")
+    failure_ctx["manifest"] = manifest
 
     # Preserve the config-provided model_path so run_context can show overrides.
     configured_model_path = cfg.get("model_path")
+    failure_ctx["configured_model_path"] = configured_model_path
     cli_overrides: Dict[str, Any] = {}
+    failure_ctx["cli_overrides"] = cli_overrides
 
     if args.model_path is not None:
         override_path = Path(args.model_path).expanduser().resolve()
@@ -223,6 +334,7 @@ def main():
         cli_overrides["model_path"] = str(override_path)
 
     model_path = Path(cfg["model_path"]).expanduser().resolve()
+    failure_ctx["model_path"] = model_path
     if not model_path.exists():
         raise SystemExit(f"model_path does not exist: {model_path}")
 
@@ -368,6 +480,17 @@ def main():
     index_found = False
     index_status = "disabled"
     index_error = None
+    failure_ctx.update(
+        {
+            "index_status": index_status,
+            "index_searched": bool(index_searched),
+            "index_found": bool(index_found),
+            "index_active": bool(index_active),
+            "index_path": index_path,
+            "index_path_found": index_path_found,
+            "index_error": index_error,
+        }
+    )
 
     if use_index:
         index_searched = True
@@ -414,6 +537,17 @@ def main():
                 # If find_fn returned a candidate path that does not exist, keep found False.
 
     index_parsed = bool(index_active and weight_map is not None)
+    failure_ctx.update(
+        {
+            "index_status": index_status,
+            "index_searched": bool(index_searched),
+            "index_found": bool(index_found),
+            "index_active": bool(index_parsed),
+            "index_path": index_path,
+            "index_path_found": index_path_found,
+            "index_error": index_error,
+        }
+    )
 
     # Make "strict" mean "an active index must exist" when index discovery is enabled.
     if strict_index and use_index and not index_parsed:
@@ -430,6 +564,7 @@ def main():
             "but model_path is a file; scanning only the anchor file. "
             "Pass the directory to scan the indexed shard set."
         )
+    failure_ctx["index_active"] = bool(index_used_for_scan)
 
     if mlx_enabled and schemes:
         if _load_mlx() is None:
@@ -917,6 +1052,7 @@ def main():
     # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
     # Tests: rg 'run_context.json' tests/
     _write_json(run_context, run_dir / "logs" / "run_context.json")
+    _clear_run_failure_artifact(run_dir)
     print(f"[collect] done in {dt:.1f}s")
     print(f"[collect] tensor_inventory rows: {len(inv_df)}")
     print(f"[collect] matrix_stats rows:     {len(ms_df)}")
@@ -925,6 +1061,38 @@ def main():
         print(f"[collect] unmatched rows:        {len(um_df)}")
     if not wl_df.empty:
         print(f"[collect] warnings:              {len(wl_df)}")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--run-dir", required=True)
+    ap.add_argument("--model-path", default=None, help="Override config model_path")
+    args = ap.parse_args()
+
+    failure_ctx: Dict[str, Any] = {
+        "run_dir": Path(args.run_dir).expanduser().resolve(),
+        "manifest": {},
+        "configured_model_path": None,
+        "model_path": None,
+        "cli_overrides": {},
+        "index_status": "not_initialized",
+        "index_searched": False,
+        "index_found": False,
+        "index_active": False,
+        "index_path": None,
+        "index_path_found": None,
+        "index_error": None,
+    }
+
+    try:
+        _main_impl(args, failure_ctx)
+    except SystemExit as exc:
+        if _system_exit_is_error(exc):
+            _write_run_failure_artifact(exc, failure_ctx)
+        raise
+    except Exception as exc:
+        _write_run_failure_artifact(exc, failure_ctx)
+        raise
 
 
 if __name__ == "__main__":
