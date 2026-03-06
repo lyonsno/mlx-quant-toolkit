@@ -1,9 +1,53 @@
 from __future__ import annotations
 
+import importlib.util
 import math
+import sys
+from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+
+_TABLE_ARTIFACTS_MODULE = None
+
+
+def _load_local_helper_module(module_name: str):
+    module_path = Path(__file__).resolve().parent / f"{module_name}.py"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        existing_file = getattr(existing, "__file__", None)
+        if existing_file is not None:
+            try:
+                if Path(existing_file).resolve() == module_path:
+                    return existing
+            except Exception:
+                pass
+
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load helper module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    had_prior_entry = module_name in sys.modules
+    prior_entry = sys.modules.get(module_name)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        current = sys.modules.get(module_name)
+        if current is module:
+            if had_prior_entry:
+                sys.modules[module_name] = prior_entry
+            else:
+                sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+def _get_table_artifacts_module():
+    global _TABLE_ARTIFACTS_MODULE
+    if _TABLE_ARTIFACTS_MODULE is None:
+        _TABLE_ARTIFACTS_MODULE = _load_local_helper_module("table_artifacts")
+    return _TABLE_ARTIFACTS_MODULE
 
 
 def _coerce_axis_series_to_nullable_int(series: pd.Series, column_name: str) -> pd.Series:
@@ -48,3 +92,49 @@ def normalize_plot_axis_columns(
             column_name,
         )
     return normalized
+
+
+def _read_table_artifact(path: Path, fmt: str) -> pd.DataFrame:
+    if fmt == "parquet":
+        return pd.read_parquet(path)
+    if fmt == "csv":
+        return pd.read_csv(path)
+
+    suffix = path.suffix.lower()
+    if suffix == ".parquet":
+        return pd.read_parquet(path)
+    if suffix == ".csv":
+        return pd.read_csv(path)
+    raise ValueError(f"Unsupported table artifact format for plotting: path={path}, format={fmt!r}")
+
+
+def load_plot_tables(
+    run_dir: str | Path,
+    artifact_keys: Iterable[str] | None = None,
+    axis_columns: Iterable[str] = ("layer", "block4"),
+) -> dict[str, pd.DataFrame]:
+    run_dir_path = Path(run_dir).expanduser().resolve()
+    table_artifacts = _get_table_artifacts_module()
+
+    if artifact_keys is None:
+        artifact_keys = table_artifacts.DEFAULT_TABLE_ARTIFACT_KEYS
+
+    discovered = table_artifacts.discover_table_artifacts(
+        run_dir_path,
+        artifact_keys=artifact_keys,
+    )
+
+    loaded: dict[str, pd.DataFrame] = {}
+    for artifact_key, meta in discovered.items():
+        raw_path = str(meta.get("path", "")).strip()
+        if not raw_path:
+            continue
+
+        path_obj = Path(raw_path)
+        abs_path = path_obj if path_obj.is_absolute() else (run_dir_path / path_obj)
+        fmt = str(meta.get("format", "")).strip().lower()
+
+        df = _read_table_artifact(abs_path, fmt)
+        loaded[artifact_key] = normalize_plot_axis_columns(df, axis_columns=axis_columns)
+
+    return loaded

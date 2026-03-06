@@ -1,4 +1,7 @@
 import importlib.util
+import json
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -31,6 +34,11 @@ class PlotInputsContractTests(unittest.TestCase):
             "Expected symbol normalize_plot_axis_columns",
         )
         self.assertTrue(callable(mod.normalize_plot_axis_columns))
+        self.assertTrue(
+            hasattr(mod, "load_plot_tables"),
+            "Expected symbol load_plot_tables",
+        )
+        self.assertTrue(callable(mod.load_plot_tables))
 
     def test_normalize_plot_axis_columns_coerces_axis_keys_to_nullable_int(self):
         mod = self._load_plot_inputs_module()
@@ -77,6 +85,110 @@ class PlotInputsContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, r"layer|oops"):
             mod.normalize_plot_axis_columns(raw, axis_columns=("layer", "block4"))
+
+    def test_load_plot_tables_uses_manifest_discovery_and_normalizes_axis_columns(self):
+        mod = self._load_plot_inputs_module()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            tables_dir = run_dir / "tables"
+            logs_dir = run_dir / "logs"
+            tables_dir.mkdir(parents=True, exist_ok=True)
+            logs_dir.mkdir(parents=True, exist_ok=True)
+
+            custom_table_path = tables_dir / "custom_layer_summary.csv"
+            pd.DataFrame(
+                {
+                    "layer": ["0", "4", ""],
+                    "block4": ["0", "1", ""],
+                    "proj": ["a_proj", "a_proj", "a_proj"],
+                    "mean__median": [0.1, 0.2, 0.3],
+                }
+            ).to_csv(custom_table_path, index=False)
+
+            manifest = {
+                "generated_at": "2026-03-06T00:00:00Z",
+                "requested_format": "csv",
+                "requested_compression": None,
+                "artifacts": {
+                    "A_weight_layer_summary": {
+                        "path": "tables/custom_layer_summary.csv",
+                        "format": "csv",
+                        "fallback": False,
+                        "error": "",
+                        "rows": 3,
+                    }
+                },
+            }
+            (logs_dir / "tables_write_manifest.json").write_text(json.dumps(manifest, indent=2))
+
+            loaded = mod.load_plot_tables(run_dir, artifact_keys=("A_weight_layer_summary",))
+
+            self.assertEqual(sorted(loaded.keys()), ["A_weight_layer_summary"])
+            frame = loaded["A_weight_layer_summary"]
+            self.assertEqual(str(frame["layer"].dtype), "Int64")
+            self.assertEqual(str(frame["block4"].dtype), "Int64")
+            self.assertEqual(list(frame["layer"][:2]), [0, 4])
+            self.assertTrue(pd.isna(frame["layer"][2]))
+            self.assertEqual(list(frame["block4"][:2]), [0, 1])
+            self.assertTrue(pd.isna(frame["block4"][2]))
+            self.assertEqual(list(frame["mean__median"]), [0.1, 0.2, 0.3])
+
+    def test_load_plot_tables_surfaces_axis_normalization_errors(self):
+        mod = self._load_plot_inputs_module()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            tables_dir = run_dir / "tables"
+            logs_dir = run_dir / "logs"
+            tables_dir.mkdir(parents=True, exist_ok=True)
+            logs_dir.mkdir(parents=True, exist_ok=True)
+
+            bad_table_path = tables_dir / "bad_layer_summary.csv"
+            pd.DataFrame(
+                {
+                    "layer": ["0", "oops"],
+                    "block4": ["0", "1"],
+                    "proj": ["a_proj", "a_proj"],
+                    "mean__median": [0.1, 0.2],
+                }
+            ).to_csv(bad_table_path, index=False)
+
+            manifest = {
+                "generated_at": "2026-03-06T00:00:00Z",
+                "requested_format": "csv",
+                "requested_compression": None,
+                "artifacts": {
+                    "A_weight_layer_summary": {
+                        "path": "tables/bad_layer_summary.csv",
+                        "format": "csv",
+                        "fallback": False,
+                        "error": "",
+                        "rows": 2,
+                    }
+                },
+            }
+            (logs_dir / "tables_write_manifest.json").write_text(json.dumps(manifest, indent=2))
+
+            with self.assertRaisesRegex(ValueError, r"layer|oops"):
+                mod.load_plot_tables(run_dir, artifact_keys=("A_weight_layer_summary",))
+
+    def test_load_local_helper_module_cleans_sys_modules_on_exec_failure(self):
+        mod = self._load_plot_inputs_module()
+        module_name = "_missing_helper_for_plot_inputs_contract_test"
+        prior = sys.modules.pop(module_name, None)
+        try:
+            with self.assertRaises(FileNotFoundError):
+                mod._load_local_helper_module(module_name)
+            self.assertNotIn(
+                module_name,
+                sys.modules,
+                "failed helper load should not leave a poisoned sys.modules entry",
+            )
+        finally:
+            sys.modules.pop(module_name, None)
+            if prior is not None:
+                sys.modules[module_name] = prior
 
 
 if __name__ == "__main__":
