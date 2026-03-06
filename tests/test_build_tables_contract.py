@@ -531,6 +531,272 @@ class BuildTablesContractTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertAlmostEqual(float(rows[0]["mean__median"]), 123.0)
 
+    def test_build_tables_ignores_manifest_data_paths_with_unsupported_suffixes(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            logs_dir = run_dir / "logs"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, output_format="csv", compression=None)
+
+            # Valid default inputs that should be used when manifest entries are invalid.
+            self._write_matrix_stats_csv(
+                data_dir,
+                [
+                    {
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "mean": 42.0,
+                        "std": 0.1,
+                        "mean_abs": 42.0,
+                        "rms": 42.0,
+                        "max_abs": 43.0,
+                        "p50_abs": 42.0,
+                        "p99_abs": 43.0,
+                        "p999_abs": 43.0,
+                        "outlier_max_over_mean": 1.0,
+                        "outlier_p99_over_median": 1.0,
+                        "outlier_p999_over_median": 1.0,
+                    }
+                ],
+            )
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_default",
+                        "w_rel_fro": 0.10,
+                        "w_rel_max": 0.15,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    }
+                ],
+            )
+
+            # Poison-pill files with unsupported suffixes under data/.
+            (data_dir / "poison_matrix_stats.txt").write_text("not a table")
+            (data_dir / "poison_quant_sim.txt").write_text("not a table")
+
+            collect_manifest = {
+                "generated_at": "2026-03-06T00:00:00Z",
+                "requested_format": "csv",
+                "requested_compression": None,
+                "artifacts": {
+                    "matrix_stats": {
+                        "path": "data/poison_matrix_stats.txt",
+                        "format": "txt",
+                        "fallback": False,
+                        "error": "",
+                        "rows": 0,
+                    },
+                    "quant_sim": {
+                        "path": "data/poison_quant_sim.txt",
+                        "format": "txt",
+                        "fallback": False,
+                        "error": "",
+                        "rows": 0,
+                    },
+                },
+            }
+            (logs_dir / "write_manifest.json").write_text(json.dumps(collect_manifest, indent=2))
+
+            self._run_build_tables(run_dir)
+
+            a_layer_cols, a_layer_rows = self._read_csv(run_dir / "tables" / "A_weight_layer_summary.csv")
+            self.assertIn("mean__median", a_layer_cols)
+            self.assertEqual(len(a_layer_rows), 1)
+            self.assertAlmostEqual(float(a_layer_rows[0]["mean__median"]), 42.0)
+
+            _, b_global_rows = self._read_csv(run_dir / "tables" / "B_quant_global_summary.csv")
+            self.assertEqual(len(b_global_rows), 1)
+            self.assertEqual(b_global_rows[0]["scheme"], "scheme_default")
+            self.assertAlmostEqual(float(b_global_rows[0]["w_rel_fro__median"]), 0.10)
+            self.assertAlmostEqual(float(b_global_rows[0]["w_rel_max__median"]), 0.15)
+
+    def test_build_tables_ignores_manifest_unsupported_suffix_for_matrix_stats_only(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            logs_dir = run_dir / "logs"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, output_format="csv", compression=None)
+
+            self._write_matrix_stats_csv(
+                data_dir,
+                [
+                    {
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "mean": 77.0,
+                        "std": 0.1,
+                        "mean_abs": 77.0,
+                        "rms": 77.0,
+                        "max_abs": 78.0,
+                        "p50_abs": 77.0,
+                        "p99_abs": 78.0,
+                        "p999_abs": 78.0,
+                        "outlier_max_over_mean": 1.0,
+                        "outlier_p99_over_median": 1.0,
+                        "outlier_p999_over_median": 1.0,
+                    }
+                ],
+            )
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_q_only",
+                        "w_rel_fro": 0.33,
+                        "w_rel_max": 0.44,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    }
+                ],
+            )
+            (data_dir / "poison_matrix_stats.txt").write_text("not a table")
+
+            collect_manifest = {
+                "generated_at": "2026-03-06T00:00:00Z",
+                "requested_format": "csv",
+                "requested_compression": None,
+                "artifacts": {
+                    "matrix_stats": {
+                        "path": "data/poison_matrix_stats.txt",
+                        "format": "txt",
+                        "fallback": False,
+                        "error": "",
+                        "rows": 0,
+                    },
+                    "quant_sim": {
+                        "path": "data/quant_sim.csv",
+                        "format": "csv",
+                        "fallback": False,
+                        "error": "",
+                        "rows": 1,
+                    },
+                },
+            }
+            (logs_dir / "write_manifest.json").write_text(json.dumps(collect_manifest, indent=2))
+
+            self._run_build_tables(run_dir)
+
+            _, a_layer_rows = self._read_csv(run_dir / "tables" / "A_weight_layer_summary.csv")
+            self.assertEqual(len(a_layer_rows), 1)
+            self.assertAlmostEqual(float(a_layer_rows[0]["mean__median"]), 77.0)
+
+            _, b_global_rows = self._read_csv(run_dir / "tables" / "B_quant_global_summary.csv")
+            self.assertEqual(len(b_global_rows), 1)
+            self.assertEqual(b_global_rows[0]["scheme"], "scheme_q_only")
+            self.assertAlmostEqual(float(b_global_rows[0]["w_rel_fro__median"]), 0.33)
+            self.assertAlmostEqual(float(b_global_rows[0]["w_rel_max__median"]), 0.44)
+
+    def test_build_tables_ignores_manifest_unsupported_suffix_for_quant_sim_only(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            logs_dir = run_dir / "logs"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, output_format="csv", compression=None)
+
+            self._write_matrix_stats_csv(
+                data_dir,
+                [
+                    {
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "mean": 88.0,
+                        "std": 0.1,
+                        "mean_abs": 88.0,
+                        "rms": 88.0,
+                        "max_abs": 89.0,
+                        "p50_abs": 88.0,
+                        "p99_abs": 89.0,
+                        "p999_abs": 89.0,
+                        "outlier_max_over_mean": 1.0,
+                        "outlier_p99_over_median": 1.0,
+                        "outlier_p999_over_median": 1.0,
+                    }
+                ],
+            )
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_q_fallback",
+                        "w_rel_fro": 0.55,
+                        "w_rel_max": 0.66,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    }
+                ],
+            )
+            (data_dir / "poison_quant_sim.txt").write_text("not a table")
+
+            collect_manifest = {
+                "generated_at": "2026-03-06T00:00:00Z",
+                "requested_format": "csv",
+                "requested_compression": None,
+                "artifacts": {
+                    "matrix_stats": {
+                        "path": "data/matrix_stats.csv",
+                        "format": "csv",
+                        "fallback": False,
+                        "error": "",
+                        "rows": 1,
+                    },
+                    "quant_sim": {
+                        "path": "data/poison_quant_sim.txt",
+                        "format": "txt",
+                        "fallback": False,
+                        "error": "",
+                        "rows": 0,
+                    },
+                },
+            }
+            (logs_dir / "write_manifest.json").write_text(json.dumps(collect_manifest, indent=2))
+
+            self._run_build_tables(run_dir)
+
+            _, a_layer_rows = self._read_csv(run_dir / "tables" / "A_weight_layer_summary.csv")
+            self.assertEqual(len(a_layer_rows), 1)
+            self.assertAlmostEqual(float(a_layer_rows[0]["mean__median"]), 88.0)
+
+            _, b_global_rows = self._read_csv(run_dir / "tables" / "B_quant_global_summary.csv")
+            self.assertEqual(len(b_global_rows), 1)
+            self.assertEqual(b_global_rows[0]["scheme"], "scheme_q_fallback")
+            self.assertAlmostEqual(float(b_global_rows[0]["w_rel_fro__median"]), 0.55)
+            self.assertAlmostEqual(float(b_global_rows[0]["w_rel_max__median"]), 0.66)
+
     def test_build_tables_handles_quant_sim_rows_without_metric_columns(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir) / "run"

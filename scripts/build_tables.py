@@ -50,6 +50,8 @@ QUANT_SIM_EMPTY_COLUMNS = [
     "bias_max",
 ]
 
+_TABLE_INPUT_SUFFIXES = {".csv", ".parquet"}
+
 
 def _safe_read_json_dict(path: Path) -> Dict[str, Any]:
     try:
@@ -130,6 +132,8 @@ def _resolve_collect_artifact_input_path(
 
     # build_tables inputs should come from data/ artifacts emitted by collect_data.
     if not rel.startswith("data/"):
+        return None
+    if candidate_abs.suffix.lower() not in _TABLE_INPUT_SUFFIXES:
         return None
     if not candidate_abs.is_file():
         return None
