@@ -2,6 +2,7 @@ import importlib.util
 import json
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -189,6 +190,87 @@ class PlotInputsContractTests(unittest.TestCase):
             sys.modules.pop(module_name, None)
             if prior is not None:
                 sys.modules[module_name] = prior
+
+    def test_load_local_helper_module_does_not_shadow_unrelated_loaded_module(self):
+        mod = self._load_plot_inputs_module()
+        module_name = "table_artifacts"
+        prior = sys.modules.get(module_name)
+
+        sentinel = types.ModuleType(module_name)
+        sentinel.__file__ = str((self.repo_root / "not_the_local_helper.py").resolve())
+        sys.modules[module_name] = sentinel
+
+        try:
+            loaded = mod._load_local_helper_module(module_name)
+            self.assertIs(
+                sys.modules.get(module_name),
+                sentinel,
+                "local helper loading should not overwrite unrelated preloaded module entries",
+            )
+            self.assertTrue(
+                hasattr(loaded, "discover_table_artifacts"),
+                "local helper module should still load successfully",
+            )
+            self.assertIsNot(loaded, sentinel)
+        finally:
+            current = sys.modules.get(module_name)
+            if current is sentinel:
+                if prior is None:
+                    sys.modules.pop(module_name, None)
+                else:
+                    sys.modules[module_name] = prior
+            elif prior is None:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = prior
+
+    def test_load_plot_tables_falls_back_to_legacy_scan_when_manifest_entry_unavailable(self):
+        mod = self._load_plot_inputs_module()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            tables_dir = run_dir / "tables"
+            logs_dir = run_dir / "logs"
+            tables_dir.mkdir(parents=True, exist_ok=True)
+            logs_dir.mkdir(parents=True, exist_ok=True)
+
+            legacy_table_path = tables_dir / "A_weight_layer_summary.csv"
+            pd.DataFrame(
+                {
+                    "layer": ["0", "2", ""],
+                    "block4": ["0", "0", ""],
+                    "proj": ["a_proj", "a_proj", "a_proj"],
+                    "mean__median": [1.0, 2.0, 3.0],
+                }
+            ).to_csv(legacy_table_path, index=False)
+
+            # Manifest entry is unavailable to discovery (no usable path), forcing legacy scan fallback.
+            manifest = {
+                "generated_at": "2026-03-06T00:00:00Z",
+                "requested_format": "csv",
+                "requested_compression": None,
+                "artifacts": {
+                    "A_weight_layer_summary": {
+                        "format": "csv",
+                        "fallback": False,
+                        "error": "",
+                        "rows": 3,
+                    }
+                },
+            }
+            (logs_dir / "tables_write_manifest.json").write_text(json.dumps(manifest, indent=2))
+
+            loaded = mod.load_plot_tables(run_dir, artifact_keys=("A_weight_layer_summary",))
+
+            self.assertEqual(sorted(loaded.keys()), ["A_weight_layer_summary"])
+            frame = loaded["A_weight_layer_summary"]
+            self.assertEqual(str(frame["layer"].dtype), "Int64")
+            self.assertEqual(str(frame["block4"].dtype), "Int64")
+            self.assertEqual(list(frame["layer"][:2]), [0, 2])
+            self.assertTrue(pd.isna(frame["layer"][2]))
+            self.assertEqual(list(frame["block4"][:2]), [0, 0])
+            self.assertTrue(pd.isna(frame["block4"][2]))
+            self.assertEqual(list(frame["mean__median"]), [1.0, 2.0, 3.0])
 
 
 if __name__ == "__main__":

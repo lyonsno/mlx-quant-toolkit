@@ -11,10 +11,17 @@ import pandas as pd
 _TABLE_ARTIFACTS_MODULE = None
 
 
+def _local_helper_module_key(module_name: str) -> str:
+    return f"{__name__}.__local__.{module_name}"
+
+
 def _load_local_helper_module(module_name: str):
     module_path = Path(__file__).resolve().parent / f"{module_name}.py"
-    existing = sys.modules.get(module_name)
-    if existing is not None:
+    local_module_key = _local_helper_module_key(module_name)
+    for key in (local_module_key, module_name):
+        existing = sys.modules.get(key)
+        if existing is None:
+            continue
         existing_file = getattr(existing, "__file__", None)
         if existing_file is not None:
             try:
@@ -23,22 +30,22 @@ def _load_local_helper_module(module_name: str):
             except Exception:
                 pass
 
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    spec = importlib.util.spec_from_file_location(local_module_key, module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load helper module: {module_path}")
     module = importlib.util.module_from_spec(spec)
-    had_prior_entry = module_name in sys.modules
-    prior_entry = sys.modules.get(module_name)
-    sys.modules[module_name] = module
+    had_prior_entry = local_module_key in sys.modules
+    prior_entry = sys.modules.get(local_module_key)
+    sys.modules[local_module_key] = module
     try:
         spec.loader.exec_module(module)
     except Exception:
-        current = sys.modules.get(module_name)
+        current = sys.modules.get(local_module_key)
         if current is module:
             if had_prior_entry:
-                sys.modules[module_name] = prior_entry
+                sys.modules[local_module_key] = prior_entry
             else:
-                sys.modules.pop(module_name, None)
+                sys.modules.pop(local_module_key, None)
         raise
     return module
 
