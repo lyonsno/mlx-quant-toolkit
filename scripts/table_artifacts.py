@@ -32,18 +32,32 @@ def _safe_read_json_dict(path: Path) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _to_rel_path(path: Path, run_dir: Path) -> str:
-    try:
-        return path.resolve().relative_to(run_dir.resolve()).as_posix()
-    except Exception:
-        return str(path)
-
-
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
     except Exception:
         return default
+
+
+def _normalize_existing_table_path(abs_path: Path, run_dir: Path) -> str | None:
+    # Validate containment using resolved paths so symlink targets cannot escape run_dir.
+    try:
+        rel_path = abs_path.resolve().relative_to(run_dir.resolve()).as_posix()
+    except Exception:
+        return None
+
+    rel_path_obj = Path(rel_path)
+    rel_path_posix = rel_path_obj.as_posix()
+    if rel_path_obj.is_absolute() or rel_path_posix in {"", "."}:
+        return None
+    if not rel_path_posix.startswith("tables/"):
+        return None
+    if rel_path_obj.suffix.lower() not in _TABLE_FILE_SUFFIXES:
+        return None
+    if not abs_path.is_file():
+        return None
+
+    return rel_path_posix
 
 
 def _normalize_manifest_entry(entry: Dict[str, Any], run_dir: Path) -> Dict[str, Any] | None:
@@ -56,20 +70,8 @@ def _normalize_manifest_entry(entry: Dict[str, Any], run_dir: Path) -> Dict[str,
 
     path_obj = Path(path_text)
     abs_path = path_obj if path_obj.is_absolute() else (run_dir / path_obj)
-    rel_path = _to_rel_path(abs_path, run_dir)
-    rel_path_obj = Path(rel_path)
-    rel_path_posix = rel_path_obj.as_posix()
-
-    # Reject manifest paths that resolve outside run_dir.
-    if rel_path_obj.is_absolute() or rel_path_posix in {"", "."}:
-        return None
-
-    # Accept only table files under run_dir/tables in supported formats.
-    if not rel_path_posix.startswith("tables/"):
-        return None
-    if rel_path_obj.suffix.lower() not in _TABLE_FILE_SUFFIXES:
-        return None
-    if not abs_path.is_file():
+    rel_path_posix = _normalize_existing_table_path(abs_path, run_dir)
+    if rel_path_posix is None:
         return None
 
     return {
@@ -85,18 +87,22 @@ def _normalize_manifest_entry(entry: Dict[str, Any], run_dir: Path) -> Dict[str,
 def _legacy_scan_entry(run_dir: Path, artifact_key: str) -> Dict[str, Any] | None:
     parquet_path = run_dir / "tables" / f"{artifact_key}.parquet"
     csv_path = run_dir / "tables" / f"{artifact_key}.csv"
-    if parquet_path.exists():
+
+    parquet_rel = _normalize_existing_table_path(parquet_path, run_dir)
+    if parquet_rel is not None:
         return {
-            "path": _to_rel_path(parquet_path, run_dir),
+            "path": parquet_rel,
             "format": "parquet",
             "fallback": False,
             "error": "",
             "rows": 0,
             "source": "legacy_scan",
         }
-    if csv_path.exists():
+
+    csv_rel = _normalize_existing_table_path(csv_path, run_dir)
+    if csv_rel is not None:
         return {
-            "path": _to_rel_path(csv_path, run_dir),
+            "path": csv_rel,
             "format": "csv",
             "fallback": False,
             "error": "",

@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -333,6 +334,36 @@ class TablesArtifactHelperContractTests(unittest.TestCase):
             )
             self.assertEqual(discovered["B_quant_deltas"]["source"], "legacy_scan")
             self.assertEqual(discovered["B_quant_deltas"]["path"], "tables/B_quant_deltas.csv")
+
+    def test_discover_table_artifacts_legacy_scan_rejects_symlink_targets_outside_run_dir(self):
+        mod = _load_module("table_artifacts", self.scripts_dir / "table_artifacts.py")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            run_dir = tmp_path / "run"
+            expected = ["A_weight_global_summary"]
+
+            outside = tmp_path / "outside.csv"
+            self._write_file(outside, "col\n99\n")
+
+            tables_dir = run_dir / "tables"
+            tables_dir.mkdir(parents=True, exist_ok=True)
+            symlink_path = tables_dir / "A_weight_global_summary.csv"
+
+            if not hasattr(os, "symlink"):
+                self.skipTest("os.symlink unavailable on this platform")
+
+            try:
+                os.symlink(outside, symlink_path)
+            except OSError as exc:
+                self.skipTest(f"symlink creation not permitted in test environment: {exc}")
+
+            discovered = mod.discover_table_artifacts(run_dir, expected)
+            self.assertEqual(
+                discovered,
+                {},
+                "Legacy table discovery should reject symlinked artifacts that resolve outside run_dir",
+            )
 
 
 if __name__ == "__main__":
