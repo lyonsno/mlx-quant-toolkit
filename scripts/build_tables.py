@@ -51,6 +51,20 @@ QUANT_SIM_EMPTY_COLUMNS = [
 ]
 
 
+def _safe_read_json_dict(path: Path) -> Dict[str, Any]:
+    try:
+        raw = path.read_text()
+    except Exception:
+        return {}
+    if not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _read_df(path: Path, empty_columns: List[str] | None = None) -> pd.DataFrame:
     def _read_csv(csv_path: Path) -> pd.DataFrame:
         try:
@@ -83,6 +97,44 @@ def _path_for_manifest(path: Path, run_dir: Path) -> str:
         return path.resolve().relative_to(run_dir.resolve()).as_posix()
     except Exception:
         return str(path)
+
+
+def _resolve_collect_artifact_input_path(
+    run_dir: Path,
+    manifest_artifacts: Dict[str, Any],
+    artifact_key: str,
+) -> Path | None:
+    entry = manifest_artifacts.get(artifact_key)
+    if not isinstance(entry, dict):
+        return None
+
+    raw_path = entry.get("path")
+    if raw_path is None:
+        return None
+    path_text = str(raw_path).strip()
+    if not path_text:
+        return None
+
+    # Accept manifests created on other platforms by normalizing separators.
+    # Example: "data\\matrix_stats.csv" (Windows) -> "data/matrix_stats.csv".
+    path_text = path_text.replace("\\", "/")
+
+    candidate = Path(path_text)
+    candidate_abs = candidate if candidate.is_absolute() else (run_dir / candidate)
+
+    # Reject manifest paths outside run_dir for defensive path hygiene.
+    try:
+        rel = candidate_abs.resolve().relative_to(run_dir.resolve()).as_posix()
+    except Exception:
+        return None
+
+    # build_tables inputs should come from data/ artifacts emitted by collect_data.
+    if not rel.startswith("data/"):
+        return None
+    if not candidate_abs.is_file():
+        return None
+
+    return candidate_abs
 
 
 def _normalize_write_meta(meta: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
@@ -151,6 +203,20 @@ def _quantile_func(q: float, label: str):
 
 
 def _agg_with_funcs(df: pd.DataFrame, group_cols: List[str], value_cols: List[str], agg_funcs: List[Any]) -> pd.DataFrame:
+    if not value_cols:
+        # Preserve group-axis rows when metric columns are unavailable.
+        # This keeps plotting keys stable without emitting vacuous metric columns.
+        base = df.copy()
+        for col in group_cols:
+            if col not in base.columns:
+                base[col] = pd.NA
+        return (
+            base[group_cols]
+            .drop_duplicates()
+            .sort_values(group_cols, kind="mergesort")
+            .reset_index(drop=True)
+        )
+
     grouped = df.groupby(group_cols, dropna=False)[value_cols].agg(agg_funcs).reset_index()
     # Flatten MultiIndex columns produced by multi-agg.
     grouped.columns = [
@@ -171,12 +237,33 @@ def main():
     compression = cfg.get("output", {}).get("compression", None)
     write_manifest_artifacts: Dict[str, Dict[str, Any]] = {}
 
+    collect_manifest = _safe_read_json_dict(run_dir / "logs" / "write_manifest.json")
+    collect_manifest_artifacts = collect_manifest.get("artifacts", {})
+    if not isinstance(collect_manifest_artifacts, dict):
+        collect_manifest_artifacts = {}
+
+    matrix_stats_input = _resolve_collect_artifact_input_path(
+        run_dir,
+        collect_manifest_artifacts,
+        "matrix_stats",
+    )
+    quant_sim_input = _resolve_collect_artifact_input_path(
+        run_dir,
+        collect_manifest_artifacts,
+        "quant_sim",
+    )
+
+    if matrix_stats_input is None:
+        matrix_stats_input = run_dir / "data" / "matrix_stats.parquet"
+    if quant_sim_input is None:
+        quant_sim_input = run_dir / "data" / "quant_sim.parquet"
+
     ms = _read_df(
-        run_dir / "data" / "matrix_stats.parquet",
+        matrix_stats_input,
         empty_columns=MATRIX_STATS_EMPTY_COLUMNS,
     )
     qs = _read_df(
-        run_dir / "data" / "quant_sim.parquet",
+        quant_sim_input,
         empty_columns=QUANT_SIM_EMPTY_COLUMNS,
     )
 
@@ -264,14 +351,21 @@ def main():
     delta_pairs = cfg.get("delta_pairs", [])
     if delta_pairs:
         base_index = ["derived_tensor", "layer", "block4", "proj", "expert_id", "rows", "cols"]
-        pivot = qs.pivot_table(
-            index=base_index,
-            columns="scheme",
-            values=["w_rel_fro", "w_rel_max"],
-            aggfunc="first"
-        )
-        pivot.columns = [f"{metric}__{scheme}" for (metric, scheme) in pivot.columns]
-        pivot = pivot.reset_index()
+        for col in base_index:
+            if col not in qs.columns:
+                qs[col] = pd.NA
+        delta_metric_values = [c for c in ["w_rel_fro", "w_rel_max"] if c in qs.columns]
+        if delta_metric_values:
+            pivot = qs.pivot_table(
+                index=base_index,
+                columns="scheme",
+                values=delta_metric_values,
+                aggfunc="first",
+            )
+            pivot.columns = [f"{metric}__{scheme}" for (metric, scheme) in pivot.columns]
+            pivot = pivot.reset_index()
+        else:
+            pivot = qs[base_index].drop_duplicates().reset_index(drop=True)
 
         delta_rows = []
         for pair in delta_pairs:
