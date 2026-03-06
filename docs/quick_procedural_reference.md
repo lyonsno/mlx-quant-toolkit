@@ -105,7 +105,10 @@ uv run python scripts/collect_data.py --run-dir ./runs/test-model/test-run
 # 4. Build tables
 uv run python scripts/build_tables.py --run-dir ./runs/test-model/test-run
 
-# 5. Inspect outputs in runs/test-model/test-run/{data,tables,logs}
+# 5. Optional: build baseline plots
+uv run python scripts/build_plots.py --run-dir ./runs/test-model/test-run
+
+# 6. Inspect outputs in runs/test-model/test-run/{data,tables,plots,logs}
 ```
 
 ### Running tests
@@ -152,6 +155,6 @@ uv run python -m unittest tests.test_packed_split_strictness  # specific module
 
 - Python ≥ 3.12.9
 - Base dependencies: `ml-dtypes`, `numpy`, `pandas`, `safetensors`
-- Optional extras: `mlx` (`mlx`, `mlx-lm`) and `parquet` (`pyarrow`)
+- Optional extras: `mlx` (`mlx`, `mlx-lm`), `parquet` (`pyarrow`), and `plot` (`matplotlib`, `pyarrow`)
 - Uses `uv` for package management (Makefile assumes `.venv/bin/python`)
 - Tests are `unittest`-based, no pytest

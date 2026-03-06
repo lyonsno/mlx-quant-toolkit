@@ -102,14 +102,22 @@ def normalize_plot_axis_columns(
 
 
 def _read_table_artifact(path: Path, fmt: str) -> pd.DataFrame:
+    def _read_parquet(parquet_path: Path) -> pd.DataFrame:
+        try:
+            return pd.read_parquet(parquet_path)
+        except ImportError as exc:
+            raise RuntimeError(
+                "Reading parquet table artifacts for plotting requires pyarrow. Install the plot or parquet extras."
+            ) from exc
+
     if fmt == "parquet":
-        return pd.read_parquet(path)
+        return _read_parquet(path)
     if fmt == "csv":
         return pd.read_csv(path)
 
     suffix = path.suffix.lower()
     if suffix == ".parquet":
-        return pd.read_parquet(path)
+        return _read_parquet(path)
     if suffix == ".csv":
         return pd.read_csv(path)
     raise ValueError(f"Unsupported table artifact format for plotting: path={path}, format={fmt!r}")

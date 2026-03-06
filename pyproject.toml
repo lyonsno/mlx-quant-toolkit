@@ -19,8 +19,13 @@ mlx = [
 parquet = [
     "pyarrow>=22.0.0",
 ]
+plot = [
+    "matplotlib>=3.10.0",
+    "pyarrow>=22.0.0",
+]
 all = [
     "mlx>=0.30.0",
     "mlx-lm>=0.28.4",
     "pyarrow>=22.0.0",
+    "matplotlib>=3.10.0",
 ]

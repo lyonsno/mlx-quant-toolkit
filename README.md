@@ -45,6 +45,12 @@ python scripts/collect_data.py --run-dir ./runs/<model>/<run> --model-path /path
 python scripts/build_tables.py --run-dir ./runs/<model>/<run>
 ```
 
+4) (Optional) Build baseline plots from summary tables:
+
+```bash
+python scripts/build_plots.py --run-dir ./runs/<model>/<run>
+```
+
 ## Installation / prerequisites
 
 - Python `3.12.9` (see `.python-version`).
@@ -60,16 +66,18 @@ Common setups:
 
 Optional dependencies (runtime behavior):
 
-- `pyproject.toml` keeps `mlx` and `pyarrow` as install extras so the base pipeline install stays portable.
+- `pyproject.toml` keeps `mlx`, `pyarrow`, and plotting dependencies as install extras so the base pipeline install stays portable.
 - Install extras when needed:
-  - `uv sync --extra mlx --extra parquet` (or `uv sync --extra all`)
-  - `./.venv/bin/pip install -e ".[mlx,parquet]"` (or `-e ".[all]"`)
+  - `uv sync --extra mlx --extra parquet --extra plot` (or `uv sync --extra all`)
+  - `./.venv/bin/pip install -e ".[mlx,parquet,plot]"` (or `-e ".[all]"`)
 - `mlx` is only required for quantization simulation. If `mlx` is not importable,
   `collect_data.py` will warn and still write `matrix_stats` and `quant_sim` (with zero rows).
 - Parquet writing requires a working Parquet backend (typically `pyarrow`). If Parquet writing fails for any
   reason (missing backend, invalid compression, etc.), the pipeline falls back to CSV and records that fallback
   in stage-specific manifests: `logs/write_manifest.json` for `collect_data.py` outputs and
   `logs/tables_write_manifest.json` for `build_tables.py` outputs.
+- Plot generation requires `matplotlib`, and default parquet-backed table artifacts require `pyarrow` at plot-read time.
+  The `plot` extra includes both so `build_plots.py` can handle default runs without extra dependency juggling.
 
 Dependency policy (for new packages):
 
@@ -92,6 +100,9 @@ Dependency policy (for new packages):
 - `scripts/build_tables.py`
   - Aggregates `matrix_stats` and `quant_sim` into layer/block/global summary tables under `tables/`.
   - Writes `logs/tables_write_manifest.json` for table artifact write metadata.
+- `scripts/build_plots.py`
+  - Loads table artifacts using `scripts/plot_inputs.py` resolution/normalization rules.
+  - Writes a deterministic baseline set of plots under `plots/global/` and `plots/layer/`.
 
 ## Configuration (`analysis_config.json`)
 
@@ -415,6 +426,7 @@ Tiny-fixture pipeline:
 - `python scripts/init_run.py --root ./runs --model-id <model> --run-name <run> --model-path /path/to/model`
 - `python scripts/collect_data.py --run-dir ./runs/<model>/<run>`
 - `python scripts/build_tables.py --run-dir ./runs/<model>/<run>`
+- `python scripts/build_plots.py --run-dir ./runs/<model>/<run>` (optional; requires plot extra)
 
 Subprocess-based acceptance tests must use:
 - `sys.executable`, `cwd=repo_root`, `capture_output=True`, and `PYTHONWARNINGS=default`

@@ -20,7 +20,9 @@ custom_mlx_quant_tools/
 │   ├── init_run.py       # Create run directory + config template
 │   ├── collect_data.py   # Main scanning/extraction/stats pipeline
 │   ├── collect_*.py      # Sub-modules (extract, io, pipeline, quant, stats, reporting)
-│   └── metadata.py       # Config.json parsing
+│   ├── metadata.py       # Config.json parsing
+│   ├── plot_inputs.py    # Table discovery/normalization for plotting
+│   └── build_plots.py    # Plot generation from table artifacts
 ├── tests/                # Unit and acceptance tests (unittest-style)
 ├── runs/                 # Output root (created by init_run)
 │   └── <model-id>/<run-name>/
@@ -37,7 +39,7 @@ custom_mlx_quant_tools/
 Key config files:
 ├── AGENTS.md             # Agent-specific rules (this file is for AI assistants)
 ├── README.md             # User-facing documentation
-├── pyproject.toml        # Base deps: ml-dtypes, numpy, pandas, safetensors; optional extras: parquet (pyarrow), mlx (mlx, mlx-lm)
+├── pyproject.toml        # Base deps: ml-dtypes, numpy, pandas, safetensors; optional extras: parquet (pyarrow), plot (matplotlib + pyarrow), mlx (mlx, mlx-lm)
 └── Makefile              # Test commands: `make test`, `make verbose-test`
 ```
 
@@ -52,8 +54,9 @@ Key config files:
 | `scripts/init_run.py` | Creates run directory with `manifest.json` and `analysis_config.json` template | `runs/<model-id>/<run-name>/analysis_config.json` |
 | `scripts/collect_data.py` | Main pipeline: scan files → extract matrices → compute stats → optionally quant-sim | `data/` artifacts, `logs/` audit artifacts |
 | `scripts/build_tables.py` | Aggregates `matrix_stats` + `quant_sim` into layer/block/global tables | `tables/A_*`, `tables/B_*`, optional `B_quant_deltas.*` |
+| `scripts/build_plots.py` | Loads table artifacts and renders baseline plots | `plots/global/*.png`, `plots/layer/*.png` |
 
-Run sequence: `init_run` → edit `analysis_config.json` → `collect_data` → `build_tables`.
+Run sequence: `init_run` → edit `analysis_config.json` → `collect_data` → `build_tables` → `build_plots` (optional).
 
 **Core Concepts**: See `quick_concept_reference.md` for detailed explanations of canonicalization, extraction rules, packed splits, projection canonicalization, and safetensors index support.
 
@@ -71,6 +74,8 @@ For understanding specific areas:
 | Statistics computation | `scripts/collect_stats.py` |
 | Reporting/warnings | `scripts/collect_reporting.py` |
 | Table aggregation | `scripts/build_tables.py` |
+| Plotting inputs | `scripts/plot_inputs.py` |
+| Plot generation | `scripts/build_plots.py` |
 | Config validation | `scripts/collect_pipeline.py` (loads and validates config) |
 | Contract surfaces | Search `CONTRACT SURFACE:` in `scripts/` |
 
@@ -80,6 +85,6 @@ For understanding specific areas:
 
 - Python ≥ 3.12.9
 - Base dependencies: `ml-dtypes`, `numpy`, `pandas`, `safetensors`
-- Optional extras: `mlx` (`mlx`, `mlx-lm`) and `parquet` (`pyarrow`)
+- Optional extras: `mlx` (`mlx`, `mlx-lm`), `parquet` (`pyarrow`), `plot` (`matplotlib`, `pyarrow`)
 - Uses `uv` for package management (Makefile assumes `.venv/bin/python`)
 - Tests are `unittest`-based, no pytest

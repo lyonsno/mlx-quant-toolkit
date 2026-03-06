@@ -32,6 +32,7 @@ class DependencyContractTests(unittest.TestCase):
         self.assertNotIn("mlx", dep_names)
         self.assertNotIn("mlx-lm", dep_names)
         self.assertNotIn("pyarrow", dep_names)
+        self.assertNotIn("matplotlib", dep_names)
 
     def test_optional_dependency_groups_cover_runtime_optional_components(self):
         project = self._load_pyproject_project_table()
@@ -40,13 +41,17 @@ class DependencyContractTests(unittest.TestCase):
 
         self.assertIn("mlx", optional)
         self.assertIn("parquet", optional)
+        self.assertIn("plot", optional)
 
         mlx_deps = {_normalize_dep_name(spec) for spec in optional["mlx"]}
         parquet_deps = {_normalize_dep_name(spec) for spec in optional["parquet"]}
+        plot_deps = {_normalize_dep_name(spec) for spec in optional["plot"]}
 
         self.assertIn("mlx", mlx_deps)
         self.assertIn("mlx-lm", mlx_deps)
         self.assertIn("pyarrow", parquet_deps)
+        self.assertIn("pyarrow", plot_deps)
+        self.assertIn("matplotlib", plot_deps)
 
     def test_all_extra_is_exact_union_of_capability_extras(self):
         project = self._load_pyproject_project_table()
@@ -58,12 +63,14 @@ class DependencyContractTests(unittest.TestCase):
         self.assertIn("all", optional)
         self.assertIn("mlx", optional)
         self.assertIn("parquet", optional)
+        self.assertIn("plot", optional)
 
         all_deps = {_normalize_dep_name(spec) for spec in optional["all"]}
         mlx_deps = {_normalize_dep_name(spec) for spec in optional["mlx"]}
         parquet_deps = {_normalize_dep_name(spec) for spec in optional["parquet"]}
+        plot_deps = {_normalize_dep_name(spec) for spec in optional["plot"]}
 
-        self.assertEqual(all_deps, mlx_deps | parquet_deps)
+        self.assertEqual(all_deps, mlx_deps | parquet_deps | plot_deps)
 
 
 if __name__ == "__main__":

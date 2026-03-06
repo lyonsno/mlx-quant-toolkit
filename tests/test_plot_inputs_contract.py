@@ -272,6 +272,46 @@ class PlotInputsContractTests(unittest.TestCase):
             self.assertTrue(pd.isna(frame["block4"][2]))
             self.assertEqual(list(frame["mean__median"]), [1.0, 2.0, 3.0])
 
+    def test_load_plot_tables_surfaces_clear_error_when_parquet_reader_missing(self):
+        mod = self._load_plot_inputs_module()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            tables_dir = run_dir / "tables"
+            logs_dir = run_dir / "logs"
+            tables_dir.mkdir(parents=True, exist_ok=True)
+            logs_dir.mkdir(parents=True, exist_ok=True)
+
+            parquet_path = tables_dir / "A_weight_global_summary.parquet"
+            parquet_path.write_text("not-a-real-parquet-file")
+
+            manifest = {
+                "generated_at": "2026-03-06T00:00:00Z",
+                "requested_format": "parquet",
+                "requested_compression": None,
+                "artifacts": {
+                    "A_weight_global_summary": {
+                        "path": "tables/A_weight_global_summary.parquet",
+                        "format": "parquet",
+                        "fallback": False,
+                        "error": "",
+                        "rows": 1,
+                    }
+                },
+            }
+            (logs_dir / "tables_write_manifest.json").write_text(json.dumps(manifest, indent=2))
+
+            original = mod.pd.read_parquet
+            try:
+                def _raise_import_error(_path):
+                    raise ImportError("no usable parquet engine")
+
+                mod.pd.read_parquet = _raise_import_error
+                with self.assertRaisesRegex(RuntimeError, r"pyarrow|plot|parquet"):
+                    mod.load_plot_tables(run_dir, artifact_keys=("A_weight_global_summary",))
+            finally:
+                mod.pd.read_parquet = original
+
 
 if __name__ == "__main__":
     unittest.main()
