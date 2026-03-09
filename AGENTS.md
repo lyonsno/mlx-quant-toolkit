@@ -94,6 +94,26 @@ Ticket-specific guardrails:
 - Tickets introducing a report (`index_report`, warnings, etc.) should include at least one test where each category is non-empty when feasible.
 - Any new config key needs a backward-compat test: key absent behaves sensibly.
 
+### Contract Matrix Review (Required Pre-PR)
+Use this matrix during both code review and test review. A change is not complete until each relevant row is explicitly checked.
+
+| Area | Code Review Questions | Test Review Questions |
+|------|------------------------|-----------------------|
+| Config shape + defaults | Is validation done at a single boundary before downstream `.get`/field access? Are defaults explicit and centralized? | Are malformed root/container shapes covered (for example non-object config roots, wrong-type sections)? Are unset/default/null semantics pinned? |
+| Selection/filtering | Is filtering applied at discovery/load boundary (not only write suppression)? Are dedupe/order rules explicit? | Do tests include poison-pill unselected artifacts that fail if touched? Are selected keys and output sets exact? |
+| Discovery fallback | Are manifest, legacy-scan, and stale/corrupt-manifest paths handled deterministically? | Are absent, malformed JSON, and valid-JSON wrong-schema manifest cases covered? |
+| Per-artifact execution | Are failures isolated per selected artifact when policy is best-effort? Are error contexts preserved? | Do tests assert written/skipped/error per artifact with concrete fields (`status`, `path`, `source_artifact`, `error`)? |
+| Audit outputs | Is `plots_write_manifest.json` (or equivalent) emitted according to policy boundaries? | Do tests assert manifest schema, requested keys, and manifest-vs-disk consistency? |
+| Output artifacts | Are artifact names/paths intentional and centralized? | Do success tests assert output exclusivity (no extra files), not only existence? |
+| Exit semantics | Are non-zero/zero rules tied to policy (validation errors vs best-effort artifact errors)? | Do tests pin exit codes for all major paths (success, partial error, all error, early validation failure)? |
+
+Additional pre-PR rules tied to the matrix:
+- If artifact names/paths/keys change, explicitly mark the change as either:
+  - breaking accepted now, or
+  - compatibility bridge provided.
+- For any new policy boundary (for example explicit vs implicit selection), add at least one in-test comment that states the intended contract.
+- Prefer structured assertions over broad message regexes; message checks should be minimal and stable.
+
 ---
 
 ## Running locally
