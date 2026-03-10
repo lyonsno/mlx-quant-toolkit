@@ -33,6 +33,25 @@ MATRIX_STATS_EMPTY_COLUMNS = [
     "outlier_p999_over_median",
 ]
 
+MATRIX_STATS_AXIS_COLUMNS = [
+    "layer",
+    "proj",
+]
+
+MATRIX_STATS_METRIC_COLUMNS = [
+    "mean",
+    "std",
+    "mean_abs",
+    "rms",
+    "max_abs",
+    "p50_abs",
+    "p99_abs",
+    "p999_abs",
+    "outlier_max_over_mean",
+    "outlier_p99_over_median",
+    "outlier_p999_over_median",
+]
+
 QUANT_SIM_EMPTY_COLUMNS = [
     "derived_tensor",
     "layer",
@@ -48,6 +67,16 @@ QUANT_SIM_EMPTY_COLUMNS = [
     "scale_max",
     "bias_mean",
     "bias_max",
+]
+
+QUANT_SIM_AXIS_COLUMNS = [
+    "derived_tensor",
+    "layer",
+    "proj",
+    "expert_id",
+    "rows",
+    "cols",
+    "scheme",
 ]
 
 _TABLE_INPUT_SUFFIXES = {".csv", ".parquet"}
@@ -206,6 +235,15 @@ def _quantile_func(q: float, label: str):
     return _fn
 
 
+def _ensure_columns(df: pd.DataFrame, required_columns: List[str], *, fill_value: Any = pd.NA) -> pd.DataFrame:
+    """Return a frame that contains at least the required columns."""
+    out = df.copy()
+    for col in required_columns:
+        if col not in out.columns:
+            out[col] = fill_value
+    return out
+
+
 def _agg_with_funcs(df: pd.DataFrame, group_cols: List[str], value_cols: List[str], agg_funcs: List[Any]) -> pd.DataFrame:
     if not value_cols:
         # Preserve group-axis rows when metric columns are unavailable.
@@ -270,6 +308,11 @@ def main():
         quant_sim_input,
         empty_columns=QUANT_SIM_EMPTY_COLUMNS,
     )
+    ms = _ensure_columns(ms, MATRIX_STATS_AXIS_COLUMNS)
+    # A-table metric columns must stay numeric-friendly when synthesized; using
+    # pd.NA in object dtype can raise during std/mean aggregations on non-empty groups.
+    ms = _ensure_columns(ms, MATRIX_STATS_METRIC_COLUMNS, fill_value=float("nan"))
+    qs = _ensure_columns(qs, QUANT_SIM_AXIS_COLUMNS)
 
     # ensure block4 exists
     if "block4" not in ms.columns:

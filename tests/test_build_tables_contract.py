@@ -1,4 +1,6 @@
 import csv
+from collections import Counter
+import importlib.util
 import json
 import os
 import subprocess
@@ -6,6 +8,15 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+
+def _load_module(module_name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class BuildTablesContractTests(unittest.TestCase):
@@ -124,6 +135,9 @@ class BuildTablesContractTests(unittest.TestCase):
         )
         output = (result.stdout or "") + (result.stderr or "")
         self.assertEqual(result.returncode, 0, f"build_tables failed: {output}")
+
+    def _build_tables_path(self) -> Path:
+        return self.repo_root / "scripts" / "build_tables.py"
 
     def _read_csv(self, path: Path):
         with path.open(newline="") as handle:
@@ -314,6 +328,221 @@ class BuildTablesContractTests(unittest.TestCase):
                 self.assertEqual(entry.get("error"), "")
                 self.assertEqual(entry.get("rows"), 0)
                 self.assertEqual(entry.get("path"), f"tables/{name}.csv")
+
+    def test_build_tables_handles_schema_less_empty_loader_frames(self):
+        mod = _load_module("build_tables_schema_less_empty_contract", self._build_tables_path())
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            (run_dir / "data").mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, output_format="csv", compression=None)
+
+            read_calls: list[Path] = []
+
+            # Distinct from zero-row/header-only input: this simulates a loader path that
+            # yields a DataFrame with no schema columns at all.
+            def _fake_read_df(path: Path, empty_columns=None):
+                read_calls.append(path)
+                return mod.pd.DataFrame()
+
+            orig_read_df = mod._read_df
+            old_argv = sys.argv
+            try:
+                mod._read_df = _fake_read_df
+                sys.argv = ["build_tables.py", "--run-dir", str(run_dir)]
+                mod.main()
+            finally:
+                mod._read_df = orig_read_df
+                sys.argv = old_argv
+
+            self.assertEqual(len(read_calls), 2, "build_tables should read matrix_stats and quant_sim once each")
+            expected_read_paths = [
+                (run_dir / "data" / "matrix_stats.parquet").resolve(),
+                (run_dir / "data" / "quant_sim.parquet").resolve(),
+            ]
+            self.assertEqual(
+                Counter(path.resolve() for path in read_calls),
+                Counter(expected_read_paths),
+            )
+
+            # Contract note: in fully schema-less mode, A summaries keep their full metric
+            # columns (stat_cols are fixed in build_tables), while B summaries remain
+            # axis-only because quant metric columns are discovered from input availability.
+            expected_headers = {
+                "A_weight_layer_summary": self._expected_a_columns(["layer", "proj"], ["median", "mean", "std", "p90", "p99"]),
+                "A_weight_block4_summary": self._expected_a_columns(["block4", "proj"], ["median", "mean", "std", "p90", "p99"]),
+                "A_weight_global_summary": self._expected_a_columns(["proj"], ["min", "p01", "median", "p99", "max"]),
+                "B_quant_layer_summary": ["layer", "proj", "scheme"],
+                "B_quant_block4_summary": ["block4", "proj", "scheme"],
+                "B_quant_global_summary": ["proj", "scheme"],
+            }
+
+            for artifact, expected_cols in expected_headers.items():
+                cols, rows = self._read_csv(run_dir / "tables" / f"{artifact}.csv")
+                self.assertEqual(cols, expected_cols)
+                self.assertEqual(rows, [])
+
+            manifest = json.loads((run_dir / "logs" / "tables_write_manifest.json").read_text())
+            artifacts = manifest.get("artifacts", {})
+            self.assertEqual(sorted(artifacts), sorted(expected_headers))
+            for name in expected_headers:
+                entry = artifacts[name]
+                self.assertEqual(entry.get("format"), "csv")
+                self.assertFalse(entry.get("fallback"))
+                self.assertEqual(entry.get("error"), "")
+                self.assertEqual(entry.get("rows"), 0)
+                self.assertEqual(entry.get("path"), f"tables/{name}.csv")
+
+    def test_build_tables_handles_schema_less_matrix_stats_with_valid_quant_rows(self):
+        mod = _load_module("build_tables_schema_less_matrix_contract", self._build_tables_path())
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            (run_dir / "data").mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, output_format="csv", compression=None)
+
+            read_calls: list[Path] = []
+
+            def _fake_read_df(path: Path, empty_columns=None):
+                read_calls.append(path)
+                if path.name.startswith("matrix_stats"):
+                    return mod.pd.DataFrame()
+                if path.name.startswith("quant_sim"):
+                    return mod.pd.DataFrame(
+                        [
+                            {
+                                "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                                "layer": 0,
+                                "proj": "down_proj",
+                                "expert_id": 0,
+                                "rows": 2,
+                                "cols": 2,
+                                "scheme": "scheme_a",
+                                "w_rel_fro": 0.1,
+                                "w_rel_max": 0.2,
+                                "scale_mean": 0.0,
+                                "scale_max": 0.0,
+                                "bias_mean": 0.0,
+                                "bias_max": 0.0,
+                            }
+                        ]
+                    )
+                raise AssertionError(f"Unexpected input path in fake _read_df: {path}")
+
+            orig_read_df = mod._read_df
+            old_argv = sys.argv
+            try:
+                mod._read_df = _fake_read_df
+                sys.argv = ["build_tables.py", "--run-dir", str(run_dir)]
+                mod.main()
+            finally:
+                mod._read_df = orig_read_df
+                sys.argv = old_argv
+
+            self.assertEqual(len(read_calls), 2, "build_tables should read matrix_stats and quant_sim once each")
+            expected_read_paths = [
+                (run_dir / "data" / "matrix_stats.parquet").resolve(),
+                (run_dir / "data" / "quant_sim.parquet").resolve(),
+            ]
+            self.assertEqual(
+                Counter(path.resolve() for path in read_calls),
+                Counter(expected_read_paths),
+            )
+
+            expected_headers = {
+                "A_weight_layer_summary": self._expected_a_columns(["layer", "proj"], ["median", "mean", "std", "p90", "p99"]),
+                "A_weight_block4_summary": self._expected_a_columns(["block4", "proj"], ["median", "mean", "std", "p90", "p99"]),
+                "A_weight_global_summary": self._expected_a_columns(["proj"], ["min", "p01", "median", "p99", "max"]),
+                "B_quant_layer_summary": self._expected_b_columns(["layer", "proj", "scheme"], ["median", "mean", "p90", "p99"]),
+                "B_quant_block4_summary": self._expected_b_columns(["block4", "proj", "scheme"], ["median", "mean", "p90", "p99"]),
+                "B_quant_global_summary": self._expected_b_columns(["proj", "scheme"], ["min", "p01", "median", "p99", "max"]),
+            }
+            expected_rows = {
+                "A_weight_layer_summary": 0,
+                "A_weight_block4_summary": 0,
+                "A_weight_global_summary": 0,
+                "B_quant_layer_summary": 1,
+                "B_quant_block4_summary": 1,
+                "B_quant_global_summary": 1,
+            }
+            for artifact, expected_cols in expected_headers.items():
+                cols, rows = self._read_csv(run_dir / "tables" / f"{artifact}.csv")
+                self.assertEqual(cols, expected_cols)
+                self.assertEqual(len(rows), expected_rows[artifact])
+
+            _, b_global_rows = self._read_csv(run_dir / "tables" / "B_quant_global_summary.csv")
+            self.assertEqual(b_global_rows[0]["proj"], "down_proj")
+            self.assertEqual(b_global_rows[0]["scheme"], "scheme_a")
+            self.assertAlmostEqual(float(b_global_rows[0]["w_rel_fro__median"]), 0.1)
+            self.assertAlmostEqual(float(b_global_rows[0]["w_rel_max__median"]), 0.2)
+
+            manifest = json.loads((run_dir / "logs" / "tables_write_manifest.json").read_text())
+            artifacts = manifest.get("artifacts", {})
+            self.assertEqual(sorted(artifacts), sorted(expected_headers))
+            for name in expected_headers:
+                entry = artifacts[name]
+                self.assertEqual(entry.get("format"), "csv")
+                self.assertFalse(entry.get("fallback"))
+                self.assertEqual(entry.get("error"), "")
+                self.assertEqual(entry.get("rows"), expected_rows[name])
+                self.assertEqual(entry.get("path"), f"tables/{name}.csv")
+
+    def test_build_tables_handles_non_empty_matrix_stats_missing_numeric_columns(self):
+        mod = _load_module("build_tables_partial_schema_numeric_contract", self._build_tables_path())
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            (run_dir / "data").mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, output_format="csv", compression=None)
+
+            def _fake_read_df(path: Path, empty_columns=None):
+                if path.name.startswith("matrix_stats"):
+                    # Non-empty and intentionally partial schema: numeric stat columns like
+                    # "mean"/"std" are missing, but one numeric metric is present.
+                    return mod.pd.DataFrame(
+                        [
+                            {
+                                "layer": 0,
+                                "proj": "down_proj",
+                                "mean_abs": 1.5,
+                            }
+                        ]
+                    )
+                if path.name.startswith("quant_sim"):
+                    # Keep quant side empty so this test isolates A-table robustness.
+                    return mod.pd.DataFrame(
+                        columns=[
+                            "derived_tensor",
+                            "layer",
+                            "proj",
+                            "expert_id",
+                            "rows",
+                            "cols",
+                            "scheme",
+                        ]
+                    )
+                raise AssertionError(f"Unexpected input path in fake _read_df: {path}")
+
+            orig_read_df = mod._read_df
+            old_argv = sys.argv
+            try:
+                mod._read_df = _fake_read_df
+                sys.argv = ["build_tables.py", "--run-dir", str(run_dir)]
+                mod.main()
+            finally:
+                mod._read_df = orig_read_df
+                sys.argv = old_argv
+
+            a_layer_cols, a_layer_rows = self._read_csv(run_dir / "tables" / "A_weight_layer_summary.csv")
+            self.assertIn("mean__median", a_layer_cols)
+            self.assertIn("mean_abs__median", a_layer_cols)
+            self.assertEqual(len(a_layer_rows), 1)
+            row = a_layer_rows[0]
+            self.assertEqual(row["layer"], "0")
+            self.assertEqual(row["proj"], "down_proj")
+            self.assertEqual(row["mean__median"], "")
+            self.assertAlmostEqual(float(row["mean_abs__median"]), 1.5)
+
+            manifest = json.loads((run_dir / "logs" / "tables_write_manifest.json").read_text())
+            artifacts = manifest.get("artifacts", {})
+            self.assertEqual(artifacts["A_weight_layer_summary"]["rows"], 1)
 
     def test_build_tables_parquet_fallback_contract(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
