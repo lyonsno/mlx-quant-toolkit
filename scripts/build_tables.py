@@ -79,6 +79,15 @@ QUANT_SIM_AXIS_COLUMNS = [
     "scheme",
 ]
 
+QUANT_METRIC_COLUMNS = [
+    "w_rel_fro",
+    "w_rel_max",
+    "scale_mean",
+    "scale_max",
+    "bias_mean",
+    "bias_max",
+]
+
 _TABLE_INPUT_SUFFIXES = {".csv", ".parquet"}
 
 
@@ -236,11 +245,23 @@ def _quantile_func(q: float, label: str):
 
 
 def _ensure_columns(df: pd.DataFrame, required_columns: List[str], *, fill_value: Any = pd.NA) -> pd.DataFrame:
-    """Return a frame that contains at least the required columns."""
+    """Return a frame that contains at least the required columns.
+
+    For numeric metric columns that are missing, force float dtype when
+    adding them to avoid object-dtype promotion during aggregations.
+    """
     out = df.copy()
     for col in required_columns:
         if col not in out.columns:
-            out[col] = fill_value
+            # Determine if this is likely a numeric metric column by checking
+            # against known numeric column sets in this module.
+            # This is a heuristic: if the column name appears in either of the
+            # metric column lists, enforce float dtype to prevent TypeError
+            # during aggregations like mean/std on all-NA values.
+            if col in (MATRIX_STATS_METRIC_COLUMNS + QUANT_METRIC_COLUMNS):
+                out[col] = pd.Series(fill_value, index=out.index, dtype=float)
+            else:
+                out[col] = fill_value
     return out
 
 
@@ -364,7 +385,7 @@ def main():
     )
 
     # -------- B: quant sim summaries --------
-    qcols = ["w_rel_fro", "w_rel_max", "scale_mean", "scale_max", "bias_mean", "bias_max"]
+    qcols = QUANT_METRIC_COLUMNS
     qcols = [c for c in qcols if c in qs.columns]
 
     B_layer = _agg_with_funcs(qs, ["layer", "proj", "scheme"], qcols, ["median", "mean", p90, p99])

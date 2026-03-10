@@ -1,5 +1,4 @@
 import csv
-from collections import Counter
 import importlib.util
 import json
 import os
@@ -7,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 
 
@@ -540,19 +540,106 @@ class BuildTablesContractTests(unittest.TestCase):
             self.assertEqual(row["mean__median"], "")
             self.assertAlmostEqual(float(row["mean_abs__median"]), 1.5)
 
+            # Hardening: verify that added columns have proper missing-value sentinels and numeric dtypes.
+            # Load the CSV with pandas to inspect dtypes and NA values.
+            df = mod.pd.read_csv(run_dir / "tables" / "A_weight_layer_summary.csv")
+            # The mean__median column should be NA/NaN because "mean" was missing from input schema.
+            self.assertTrue(mod.pd.isna(df["mean__median"].iloc[0]))
+            # The column dtype should be numeric (float64), not object.
+            self.assertTrue(
+                mod.pd.api.types.is_numeric_dtype(df["mean__median"].dtype),
+                f"mean__median should have numeric dtype, got {df['mean__median'].dtype}",
+            )
+            # mean_abs__median should have a valid numeric value.
+            self.assertTrue(mod.pd.api.types.is_numeric_dtype(df["mean_abs__median"].dtype))
+            self.assertFalse(mod.pd.isna(df["mean_abs__median"].iloc[0]))
+
             manifest = json.loads((run_dir / "logs" / "tables_write_manifest.json").read_text())
             artifacts = manifest.get("artifacts", {})
             self.assertEqual(artifacts["A_weight_layer_summary"]["rows"], 1)
 
-    def test_build_tables_parquet_fallback_contract(self):
+    def test_build_tables_block4_derived_from_layer_is_na_when_layer_is_na(self):
+        """
+        Contract test: when layer column exists but contains all NA values,
+        block4 computed via floordiv(4) should also be all NA.
+
+        This catches the case where _ensure_columns adds layer with pd.NA
+        and block4 = layer.floordiv(4) would propagate NA incorrectly.
+        """
+        mod = _load_module("build_tables_block4_na_contract", self._build_tables_path())
         with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            (run_dir / "data").mkdir(parents=True, exist_ok=True)
+            self._write_config(run_dir, output_format="csv", compression=None)
+
+            def _fake_read_df(path: Path, empty_columns=None):
+                if path.name.startswith("matrix_stats"):
+                    # layer exists but is all NA; proj has a value
+                    return mod.pd.DataFrame(
+                        [
+                            {
+                                "layer": mod.pd.NA,
+                                "proj": "down_proj",
+                            }
+                        ]
+                    )
+                if path.name.startswith("quant_sim"):
+                    return mod.pd.DataFrame(
+                        columns=[
+                            "derived_tensor",
+                            "layer",
+                            "proj",
+                            "expert_id",
+                            "rows",
+                            "cols",
+                            "scheme",
+                        ]
+                    )
+                raise AssertionError(f"Unexpected input path in fake _read_df: {path}")
+
+            orig_read_df = mod._read_df
+            old_argv = sys.argv
+            try:
+                mod._read_df = _fake_read_df
+                sys.argv = ["build_tables.py", "--run-dir", str(run_dir)]
+                mod.main()
+            finally:
+                mod._read_df = orig_read_df
+                sys.argv = old_argv
+
+            # Load A_weight_block4_summary and verify block4 is all NA when layer is NA
+            block4_cols, block4_rows = self._read_csv(run_dir / "tables" / "A_weight_block4_summary.csv")
+            self.assertIn("block4", block4_cols)
+            self.assertEqual(len(block4_rows), 1)
+
+            # The block4 value should be NA/empty since it's derived from NA layer
+            self.assertEqual(block4_rows[0]["block4"], "")
+
+            # Also verify via pandas that it's genuinely NA, not just empty string
+            df = mod.pd.read_csv(run_dir / "tables" / "A_weight_block4_summary.csv")
+            self.assertTrue(
+                mod.pd.isna(df["block4"].iloc[0]) or df["block4"].iloc[0] == "",
+                f"block4 should be NA when layer is NA, got {df['block4'].iloc[0]}",
+            )
+
+            # Verify layer is also NA in the layer summary
+            layer_cols, layer_rows = self._read_csv(run_dir / "tables" / "A_weight_layer_summary.csv")
+            self.assertEqual(len(layer_rows), 1)
+            self.assertEqual(layer_rows[0]["layer"], "")
+
+            manifest = json.loads((run_dir / "logs" / "tables_write_manifest.json").read_text())
+            artifacts = manifest.get("artifacts", {})
+            self.assertEqual(artifacts["A_weight_block4_summary"]["rows"], 1)
+            self.assertEqual(artifacts["A_weight_layer_summary"]["rows"], 1)
+
+    def test_build_tables_parquet_fallback_contract(self):
+       with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir) / "run"
             data_dir = run_dir / "data"
             data_dir.mkdir(parents=True, exist_ok=True)
             self._write_config(run_dir, output_format="parquet", compression="invalid-codec")
             self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
             self._write_quant_sim_csv(data_dir, self._sample_quant_rows())
-
             self._run_build_tables(run_dir)
 
             expected_rows = {
