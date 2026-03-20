@@ -56,7 +56,12 @@ def _parse_int_from_regex(regex: re.Pattern, text: str) -> Optional[int]:
 
 def _is_shared_expert(name: str, keywords: List[str]) -> bool:
     n = name.lower()
-    return all(k.lower() in n for k in keywords)
+    tokens = [str(k).strip().lower() for k in keywords if str(k).strip()]
+    if not tokens:
+        return False
+
+    # Keep shared_expert_keywords conjunctive: every configured token must appear.
+    return all(t in n for t in tokens)
 
 
 def _infer_proj(name: str, alias_map: Dict[str, List[str]]) -> Optional[str]:

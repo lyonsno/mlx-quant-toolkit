@@ -98,6 +98,54 @@ class ProjInferenceUnitTests(unittest.TestCase):
         )
         self.assertEqual(proj, "gate_proj")
 
+    def test_is_shared_expert_matches_explicit_alias_keyword(self):
+        keywords = ["share_expert"]
+        self.assertTrue(
+            self.collect_data._is_shared_expert(
+                "model.layers.4.share_expert.down_proj.weight",
+                keywords,
+            )
+        )
+
+    def test_is_shared_expert_requires_all_keywords_even_with_extra_token(self):
+        keywords = ["shared", "expert", "router"]
+        self.assertFalse(
+            self.collect_data._is_shared_expert(
+                "model.layers.4.router.down_proj.weight",
+                keywords,
+            )
+        )
+        self.assertTrue(
+            self.collect_data._is_shared_expert(
+                "model.layers.4.shared.expert.router.down_proj.weight",
+                keywords,
+            )
+        )
+
+    def test_is_shared_expert_returns_false_for_empty_keyword_list(self):
+        self.assertFalse(
+            self.collect_data._is_shared_expert(
+                "model.layers.4.shared.expert.down_proj.weight",
+                [],
+            )
+        )
+
+    def test_is_shared_expert_returns_false_for_whitespace_only_keywords(self):
+        self.assertFalse(
+            self.collect_data._is_shared_expert(
+                "model.layers.4.shared.expert.down_proj.weight",
+                ["", "   "],
+            )
+        )
+
+    def test_is_shared_expert_ignores_blank_keywords_around_real_tokens(self):
+        self.assertTrue(
+            self.collect_data._is_shared_expert(
+                "model.layers.4.shared.down_proj.weight",
+                [" shared ", "   "],
+            )
+        )
+
     def test_record_proj_issue_coalesces_counts_and_keeps_first_example(self):
         acc = {}
         self.collect_data._record_proj_issue(
@@ -192,23 +240,28 @@ class ProjGroupNormalizationIntegrationTests(unittest.TestCase):
         proj_group_strict: bool,
         rules: list[dict] | None = None,
         dump_unmatched_tensors: bool = True,
+        expert_regex: str = r"(?:^|\\.)experts\\.(\\d+)(?:\\.|$)",
+        shared_expert_keywords: list[str] | None = None,
+        include_shared_expert: bool = True,
     ) -> None:
         if rules is None:
             rules = [rule]
+        if shared_expert_keywords is None:
+            shared_expert_keywords = ["shared", "expert"]
         cfg = {
             "model_path": str(model_dir),
             "scan": {
                 "extensions": [".npz"],
                 "experts_only": True,
-                "include_shared_expert": True,
+                "include_shared_expert": include_shared_expert,
                 "inventory_all_tensors": True,
                 "max_files": None,
             },
             "parsing": {
                 "layer_regex": r"(?:^|\\.)layers\\.(\\d+)(?:\\.|$)",
-                "expert_regex": r"(?:^|\\.)experts\\.(\\d+)(?:\\.|$)",
+                "expert_regex": expert_regex,
                 "proj_aliases": proj_aliases,
-                "shared_expert_keywords": ["shared", "expert"],
+                "shared_expert_keywords": shared_expert_keywords,
                 "strict_packed_split": True,
                 "proj_group_strict": proj_group_strict,
             },
@@ -255,6 +308,9 @@ class ProjGroupNormalizationIntegrationTests(unittest.TestCase):
         proj_group_strict: bool,
         rules: list[dict] | None = None,
         dump_unmatched_tensors: bool = True,
+        expert_regex: str = r"(?:^|\\.)experts\\.(\\d+)(?:\\.|$)",
+        shared_expert_keywords: list[str] | None = None,
+        include_shared_expert: bool = True,
     ) -> tuple[Path, dict]:
         model_dir = tmp_path / "model"
         model_dir.mkdir(parents=True, exist_ok=True)
@@ -270,6 +326,9 @@ class ProjGroupNormalizationIntegrationTests(unittest.TestCase):
             proj_group_strict,
             rules=rules,
             dump_unmatched_tensors=dump_unmatched_tensors,
+            expert_regex=expert_regex,
+            shared_expert_keywords=shared_expert_keywords,
+            include_shared_expert=include_shared_expert,
         )
 
         stub_root = self._create_stub_mlx(tmp_path)
@@ -277,6 +336,704 @@ class ProjGroupNormalizationIntegrationTests(unittest.TestCase):
         env["PYTHONPATH"] = str(stub_root) + os.pathsep + env.get("PYTHONPATH", "")
         env["PYTHONWARNINGS"] = "default"
         return run_dir, env
+
+    def test_experts_only_includes_moe_and_shared_expert_alias_tensors(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            expert_bank = np.arange(2 * 4 * 3, dtype=np.float32).reshape(2, 4, 3)
+            shared_proj = np.arange(12, dtype=np.float32).reshape(4, 3)
+            tensors = {
+                "model.layers.0.moe.down_proj.weight": expert_bank,
+                "model.layers.0.moe.gate_proj.weight": expert_bank,
+                "model.layers.0.moe.up_proj.weight": expert_bank,
+                "model.layers.0.share_expert.down_proj.weight": shared_proj,
+            }
+            moe_rule = {
+                "name": "moe_3d_bank",
+                "match": r".*moe.*\.(down_proj|gate_proj|up_proj)\.weight$",
+                "ndim": 3,
+                "layout": {
+                    "layer_axis": None,
+                    "expert_axis": 0,
+                    "rows_axis": 1,
+                    "cols_axis": 2,
+                },
+                "proj_group": 1,
+            }
+            proj_aliases = {
+                "down_proj": ["down_proj", "w2"],
+                "gate_proj": ["gate_proj", "w1"],
+                "up_proj": ["up_proj", "w3"],
+            }
+            run_dir, env = self._setup_run(
+                tmp_path,
+                tensors,
+                moe_rule,
+                proj_aliases,
+                proj_group_strict=False,
+                expert_regex=r"(?:^|\\.)moe\\.(\\d+)(?:\\.|$)",
+                # shared_expert_keywords is conjunctive; configure the explicit
+                # alias token directly for this compatibility path.
+                shared_expert_keywords=["share_expert"],
+            )
+
+            self._run_collect(run_dir, env)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertGreater(len(rows), 0)
+            self.assertTrue(
+                any(
+                    row["source_tensor"] == "model.layers.0.moe.down_proj.weight"
+                    for row in rows
+                )
+            )
+            self.assertTrue(
+                any(
+                    row["source_tensor"]
+                    == "model.layers.0.share_expert.down_proj.weight"
+                    for row in rows
+                )
+            )
+
+    def test_experts_only_excludes_shared_expert_alias_tensors_when_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            expert_bank = np.arange(2 * 4 * 3, dtype=np.float32).reshape(2, 4, 3)
+            shared_proj = np.arange(12, dtype=np.float32).reshape(4, 3)
+            tensors = {
+                "model.layers.0.moe.down_proj.weight": expert_bank,
+                "model.layers.0.share_expert.down_proj.weight": shared_proj,
+            }
+            moe_rule = {
+                "name": "moe_3d_bank",
+                "match": r".*moe.*\.(down_proj|gate_proj|up_proj)\.weight$",
+                "ndim": 3,
+                "layout": {
+                    "layer_axis": None,
+                    "expert_axis": 0,
+                    "rows_axis": 1,
+                    "cols_axis": 2,
+                },
+                "proj_group": 1,
+            }
+            proj_aliases = {
+                "down_proj": ["down_proj", "w2"],
+                "gate_proj": ["gate_proj", "w1"],
+                "up_proj": ["up_proj", "w3"],
+            }
+            run_dir, env = self._setup_run(
+                tmp_path,
+                tensors,
+                moe_rule,
+                proj_aliases,
+                proj_group_strict=False,
+                expert_regex=r"(?:^|\\.)moe\\.(\\d+)(?:\\.|$)",
+                shared_expert_keywords=["share_expert"],
+                include_shared_expert=False,
+            )
+
+            self._run_collect(run_dir, env)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(
+                all(
+                    row["source_tensor"] == "model.layers.0.moe.down_proj.weight"
+                    for row in rows
+                )
+            )
+
+            unmatched_path = run_dir / "data" / "unmatched_tensors.csv"
+            self.assertTrue(unmatched_path.exists())
+            with unmatched_path.open(newline="") as handle:
+                unmatched_rows = list(csv.DictReader(handle))
+            self.assertEqual(unmatched_rows, [])
+
+            run_health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            extraction_summary = run_health.get("extraction_summary", {})
+            self.assertEqual(int(extraction_summary.get("unmatched_expertish", -1)), 0)
+
+    def test_experts_only_includes_alias_named_moe_projections(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            expert_bank = np.arange(2 * 4 * 3, dtype=np.float32).reshape(2, 4, 3)
+            tensors = {
+                "model.layers.0.moe.w2.weight": expert_bank,
+            }
+            moe_rule = {
+                "name": "moe_3d_bank_aliases",
+                "match": r".*moe.*\.(w1|w2|w3)\.weight$",
+                "ndim": 3,
+                "layout": {
+                    "layer_axis": None,
+                    "expert_axis": 0,
+                    "rows_axis": 1,
+                    "cols_axis": 2,
+                },
+                "proj_group": 1,
+            }
+            proj_aliases = {
+                "down_proj": ["down_proj", "w2"],
+                "gate_proj": ["gate_proj", "w1"],
+                "up_proj": ["up_proj", "w3"],
+            }
+            run_dir, env = self._setup_run(
+                tmp_path,
+                tensors,
+                moe_rule,
+                proj_aliases,
+                proj_group_strict=False,
+                expert_regex=r"(?:^|\.)moe\.(\d+)(?:\.|$)",
+                shared_expert_keywords=["share_expert"],
+            )
+
+            self._run_collect(run_dir, env)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertGreater(len(rows), 0)
+            self.assertTrue(
+                any(
+                    row["source_tensor"] == "model.layers.0.moe.w2.weight"
+                    and row["proj"] == "down_proj"
+                    for row in rows
+                )
+            )
+
+    def test_experts_only_includes_moe_expert_id_proj_tensors_before_rule_extraction(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            expert_matrix = np.arange(12, dtype=np.float32).reshape(4, 3)
+            tensors = {
+                "model.layers.0.moe.7.w2.weight": expert_matrix,
+            }
+            moe_rule = {
+                "name": "moe_single_expert_alias",
+                "match": r".*moe\.(\d+)\.(w1|w2|w3)\.weight$",
+                "ndim": 2,
+                "layout": {
+                    "layer_axis": None,
+                    "expert_axis": None,
+                    "rows_axis": 0,
+                    "cols_axis": 1,
+                },
+                "expert_group": 1,
+                "proj_group": 2,
+            }
+            proj_aliases = {
+                "down_proj": ["down_proj", "w2"],
+                "gate_proj": ["gate_proj", "w1"],
+                "up_proj": ["up_proj", "w3"],
+            }
+            run_dir, env = self._setup_run(
+                tmp_path,
+                tensors,
+                moe_rule,
+                proj_aliases,
+                proj_group_strict=False,
+                expert_regex=r"(?:^|\.)moe\.(\d+)(?:\.|$)",
+                shared_expert_keywords=["share_expert"],
+            )
+
+            self._run_collect(run_dir, env)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(
+                len(rows),
+                1,
+                "A direct .moe.<expert_id>.<proj> tensor should survive experts_only and reach rule extraction.",
+            )
+            self.assertEqual(rows[0]["source_tensor"], "model.layers.0.moe.7.w2.weight")
+            self.assertEqual(rows[0]["proj"], "down_proj")
+            self.assertEqual(int(rows[0]["expert_id"]), 7)
+
+            unmatched_path = run_dir / "data" / "unmatched_tensors.csv"
+            self.assertTrue(unmatched_path.exists())
+            with unmatched_path.open(newline="") as handle:
+                unmatched_rows = list(csv.DictReader(handle))
+            self.assertEqual(unmatched_rows, [])
+
+            run_health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            extraction_summary = run_health.get("extraction_summary", {})
+            self.assertEqual(int(extraction_summary.get("unmatched_expertish", -1)), 0)
+
+    def test_experts_only_includes_start_of_string_moe_expert_id_proj_tensors(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            expert_matrix = np.arange(12, dtype=np.float32).reshape(4, 3)
+            tensors = {
+                "moe.7.w2.weight": expert_matrix,
+            }
+            moe_rule = {
+                "name": "moe_single_expert_alias",
+                "match": r".*moe\.(\d+)\.(w1|w2|w3)\.weight$",
+                "ndim": 2,
+                "layout": {
+                    "layer_axis": None,
+                    "expert_axis": None,
+                    "rows_axis": 0,
+                    "cols_axis": 1,
+                },
+                "expert_group": 1,
+                "proj_group": 2,
+            }
+            proj_aliases = {
+                "down_proj": ["down_proj", "w2"],
+                "gate_proj": ["gate_proj", "w1"],
+                "up_proj": ["up_proj", "w3"],
+            }
+            run_dir, env = self._setup_run(
+                tmp_path,
+                tensors,
+                moe_rule,
+                proj_aliases,
+                proj_group_strict=False,
+                expert_regex=r"(?:^|\.)moe\.(\d+)(?:\.|$)",
+                shared_expert_keywords=["share_expert"],
+            )
+
+            self._run_collect(run_dir, env)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(
+                len(rows),
+                1,
+                "A start-of-string moe.<expert_id>.<proj> tensor should survive experts_only and reach rule extraction.",
+            )
+            self.assertEqual(rows[0]["source_tensor"], "moe.7.w2.weight")
+            self.assertEqual(rows[0]["proj"], "down_proj")
+            self.assertEqual(int(rows[0]["expert_id"]), 7)
+
+            unmatched_path = run_dir / "data" / "unmatched_tensors.csv"
+            self.assertTrue(unmatched_path.exists())
+            with unmatched_path.open(newline="") as handle:
+                unmatched_rows = list(csv.DictReader(handle))
+            self.assertEqual(unmatched_rows, [])
+
+            run_health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            extraction_summary = run_health.get("extraction_summary", {})
+            self.assertEqual(int(extraction_summary.get("unmatched_expertish", -1)), 0)
+
+    def test_experts_only_keeps_non_strict_raw_moe_proj_group_tokens(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            expert_bank = np.arange(2 * 4 * 3, dtype=np.float32).reshape(2, 4, 3)
+            tensor_name = "model.layers.0.moe.down_projj.weight"
+            tensors = {
+                tensor_name: expert_bank,
+            }
+            moe_rule = {
+                "name": "moe_unmapped_proj_group",
+                "match": r".*moe.*\.(down_projj)\.weight$",
+                "ndim": 3,
+                "layout": {
+                    "layer_axis": None,
+                    "expert_axis": 0,
+                    "rows_axis": 1,
+                    "cols_axis": 2,
+                },
+                "proj_group": 1,
+            }
+            proj_aliases = {
+                "down_proj": ["down_proj", "w2"],
+                "gate_proj": ["gate_proj", "w1"],
+                "up_proj": ["up_proj", "w3"],
+            }
+            run_dir, env = self._setup_run(
+                tmp_path,
+                tensors,
+                moe_rule,
+                proj_aliases,
+                proj_group_strict=False,
+                expert_regex=r"(?:^|\.)moe\.(\d+)(?:\.|$)",
+                shared_expert_keywords=["share_expert"],
+            )
+
+            self._run_collect(run_dir, env)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row["source_tensor"] == tensor_name for row in rows))
+            self.assertTrue(all(row["proj"] == "down_projj" for row in rows))
+
+            unmatched_path = run_dir / "data" / "unmatched_tensors.csv"
+            self.assertTrue(unmatched_path.exists())
+            with unmatched_path.open(newline="") as handle:
+                unmatched_rows = list(csv.DictReader(handle))
+            self.assertEqual(unmatched_rows, [])
+
+            run_health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            extraction_summary = run_health.get("extraction_summary", {})
+            self.assertEqual(int(extraction_summary.get("unmatched_expertish", -1)), 0)
+
+    def test_experts_only_keeps_non_strict_raw_moe_proj_group_tokens_with_empty_alias_map(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            expert_bank = np.arange(2 * 4 * 3, dtype=np.float32).reshape(2, 4, 3)
+            tensor_name = "model.layers.0.moe.down_projj.weight"
+            tensors = {
+                tensor_name: expert_bank,
+            }
+            moe_rule = {
+                "name": "moe_unmapped_proj_group_empty_aliases",
+                "match": r".*moe.*\.(down_projj)\.weight$",
+                "ndim": 3,
+                "layout": {
+                    "layer_axis": None,
+                    "expert_axis": 0,
+                    "rows_axis": 1,
+                    "cols_axis": 2,
+                },
+                "proj_group": 1,
+            }
+            run_dir, env = self._setup_run(
+                tmp_path,
+                tensors,
+                moe_rule,
+                proj_aliases={},
+                proj_group_strict=False,
+                expert_regex=r"(?:^|\.)moe\.(\d+)(?:\.|$)",
+                shared_expert_keywords=["share_expert"],
+            )
+
+            self._run_collect(run_dir, env)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row["source_tensor"] == tensor_name for row in rows))
+            self.assertTrue(all(row["proj"] == "down_projj" for row in rows))
+
+            unmatched_path = run_dir / "data" / "unmatched_tensors.csv"
+            self.assertTrue(unmatched_path.exists())
+            with unmatched_path.open(newline="") as handle:
+                unmatched_rows = list(csv.DictReader(handle))
+            self.assertEqual(unmatched_rows, [])
+
+            run_health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            extraction_summary = run_health.get("extraction_summary", {})
+            self.assertEqual(int(extraction_summary.get("unmatched_expertish", -1)), 0)
+
+    def test_experts_only_keeps_dotted_sentinel_alias_named_moe_tensors_out_of_narrow_gate(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            expert_bank = np.arange(2 * 4 * 3, dtype=np.float32).reshape(2, 4, 3)
+            tensor_name = "model.layers.0.moe.gate.weight"
+            tensors = {
+                tensor_name: expert_bank,
+            }
+            placeholder_rule = {
+                "name": "unused_placeholder_rule",
+                "match": r"$^",
+                "ndim": 3,
+                "layout": {
+                    "layer_axis": None,
+                    "expert_axis": 0,
+                    "rows_axis": 1,
+                    "cols_axis": 2,
+                },
+            }
+            proj_aliases = {
+                "down_proj": ["down_proj", "w2", ".down."],
+                "gate_proj": ["gate_proj", "w1", ".gate."],
+                "up_proj": ["up_proj", "w3", ".up."],
+            }
+            run_dir, env = self._setup_run(
+                tmp_path,
+                tensors,
+                placeholder_rule,
+                proj_aliases,
+                proj_group_strict=False,
+                rules=[],
+                expert_regex=r"(?:^|\.)moe\.(\d+)(?:\.|$)",
+                shared_expert_keywords=["share_expert"],
+            )
+
+            self._run_collect(run_dir, env)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(
+                rows,
+                [],
+                "Dotted sentinel aliases should not widen the narrow .moe.<proj> experts_only gate.",
+            )
+
+            unmatched_path = run_dir / "data" / "unmatched_tensors.csv"
+            self.assertTrue(unmatched_path.exists())
+            with unmatched_path.open(newline="") as handle:
+                unmatched_rows = list(csv.DictReader(handle))
+            self.assertEqual(unmatched_rows, [])
+
+            run_health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            extraction_summary = run_health.get("extraction_summary", {})
+            self.assertEqual(int(extraction_summary.get("unmatched_expertish", -1)), 0)
+
+    def test_experts_only_keeps_valid_moe_tensor_while_excluding_router_poison_pill(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            expert_bank = np.arange(2 * 4 * 3, dtype=np.float32).reshape(2, 4, 3)
+            router_weights = np.arange(12, dtype=np.float32).reshape(4, 3)
+            tensors = {
+                "model.layers.0.moe.down_proj.weight": expert_bank,
+                "model.layers.0.moe.router.w1.weight": router_weights,
+            }
+            moe_rule = {
+                "name": "moe_3d_bank",
+                "match": r".*moe.*\.(down_proj|gate_proj|up_proj)\.weight$",
+                "ndim": 3,
+                "layout": {
+                    "layer_axis": None,
+                    "expert_axis": 0,
+                    "rows_axis": 1,
+                    "cols_axis": 2,
+                },
+                "proj_group": 1,
+            }
+            proj_aliases = {
+                "down_proj": ["down_proj", "w2"],
+                "gate_proj": ["gate_proj", "w1"],
+                "up_proj": ["up_proj", "w3"],
+            }
+            run_dir, env = self._setup_run(
+                tmp_path,
+                tensors,
+                moe_rule,
+                proj_aliases,
+                proj_group_strict=False,
+                expert_regex=r"(?:^|\\.)moe\\.(\\d+)(?:\\.|$)",
+                shared_expert_keywords=["shared", "expert"],
+            )
+
+            self._run_collect(run_dir, env)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(
+                all(
+                    row["source_tensor"] == "model.layers.0.moe.down_proj.weight"
+                    for row in rows
+                )
+            )
+
+            unmatched_path = run_dir / "data" / "unmatched_tensors.csv"
+            self.assertTrue(unmatched_path.exists())
+            with unmatched_path.open(newline="") as handle:
+                unmatched_rows = list(csv.DictReader(handle))
+            self.assertEqual(
+                unmatched_rows,
+                [],
+                "Router poison-pill tensors should stay excluded even when a valid expert tensor is present in the same run.",
+            )
+
+            run_health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            extraction_summary = run_health.get("extraction_summary", {})
+            self.assertEqual(int(extraction_summary.get("unmatched_expertish", -1)), 0)
+
+    def test_experts_only_trusts_explicit_rule_matches_for_router_like_moe_tensors(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            expert_bank = np.arange(2 * 4 * 3, dtype=np.float32).reshape(2, 4, 3)
+            tensor_name = "model.layers.0.moe.router.w1.weight"
+            tensors = {
+                tensor_name: expert_bank,
+            }
+            explicit_router_rule = {
+                "name": "explicit_router_moe_bank",
+                "match": r".*moe\.router\.(w1)\.weight$",
+                "ndim": 3,
+                "layout": {
+                    "layer_axis": None,
+                    "expert_axis": 0,
+                    "rows_axis": 1,
+                    "cols_axis": 2,
+                },
+                "proj_group": 1,
+            }
+            proj_aliases = {
+                "down_proj": ["down_proj", "w2"],
+                "gate_proj": ["gate_proj", "w1"],
+                "up_proj": ["up_proj", "w3"],
+            }
+            run_dir, env = self._setup_run(
+                tmp_path,
+                tensors,
+                explicit_router_rule,
+                proj_aliases,
+                proj_group_strict=False,
+                expert_regex=r"(?:^|\\.)moe\\.(\\d+)(?:\\.|$)",
+                shared_expert_keywords=["shared", "expert"],
+            )
+
+            self._run_collect(run_dir, env)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(
+                len(rows),
+                2,
+                "Explicit enabled rules should be trusted to admit tensors even when the heuristic gate would normally exclude the name.",
+            )
+            self.assertTrue(all(row["source_tensor"] == tensor_name for row in rows))
+            self.assertTrue(all(row["proj"] == "gate_proj" for row in rows))
+
+            unmatched_path = run_dir / "data" / "unmatched_tensors.csv"
+            self.assertTrue(unmatched_path.exists())
+            with unmatched_path.open(newline="") as handle:
+                unmatched_rows = list(csv.DictReader(handle))
+            self.assertEqual(unmatched_rows, [])
+
+            run_health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            extraction_summary = run_health.get("extraction_summary", {})
+            self.assertEqual(int(extraction_summary.get("unmatched_expertish", -1)), 0)
+
+    def test_experts_only_excludes_non_expert_moe_router_tensors(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            router_weights = np.arange(12, dtype=np.float32).reshape(4, 3)
+            tensors = {
+                "model.layers.0.moe.router.weight": router_weights,
+            }
+            moe_rule = {
+                "name": "moe_3d_bank",
+                "match": r".*moe.*\.(down_proj|gate_proj|up_proj)\.weight$",
+                "ndim": 3,
+                "layout": {
+                    "layer_axis": None,
+                    "expert_axis": 0,
+                    "rows_axis": 1,
+                    "cols_axis": 2,
+                },
+                "proj_group": 1,
+            }
+            proj_aliases = {
+                "down_proj": ["down_proj", "w2"],
+                "gate_proj": ["gate_proj", "w1"],
+                "up_proj": ["up_proj", "w3"],
+            }
+            run_dir, env = self._setup_run(
+                tmp_path,
+                tensors,
+                moe_rule,
+                proj_aliases,
+                proj_group_strict=False,
+                expert_regex=r"(?:^|\\.)moe\\.(\\d+)(?:\\.|$)",
+                shared_expert_keywords=["shared", "expert"],
+            )
+
+            self._run_collect(run_dir, env)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 0)
+
+            unmatched_path = run_dir / "data" / "unmatched_tensors.csv"
+            self.assertTrue(unmatched_path.exists())
+            with unmatched_path.open(newline="") as handle:
+                unmatched_rows = list(csv.DictReader(handle))
+            self.assertEqual(
+                len(unmatched_rows),
+                0,
+                "Router-only .moe. tensors should be excluded before expertish unmatched accounting.",
+            )
+
+            run_health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            extraction_summary = run_health.get("extraction_summary", {})
+            self.assertEqual(int(extraction_summary.get("unmatched_expertish", -1)), 0)
+
+    def test_experts_only_excludes_non_expert_moe_tensors_even_with_alias_like_suffix(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            router_weights = np.arange(12, dtype=np.float32).reshape(4, 3)
+            tensors = {
+                "model.layers.0.moe.router.w1.weight": router_weights,
+            }
+            moe_rule = {
+                "name": "moe_3d_bank",
+                "match": r".*moe.*\.(down_proj|gate_proj|up_proj)\.weight$",
+                "ndim": 3,
+                "layout": {
+                    "layer_axis": None,
+                    "expert_axis": 0,
+                    "rows_axis": 1,
+                    "cols_axis": 2,
+                },
+                "proj_group": 1,
+            }
+            proj_aliases = {
+                "down_proj": ["down_proj", "w2"],
+                "gate_proj": ["gate_proj", "w1"],
+                "up_proj": ["up_proj", "w3"],
+            }
+            run_dir, env = self._setup_run(
+                tmp_path,
+                tensors,
+                moe_rule,
+                proj_aliases,
+                proj_group_strict=False,
+                expert_regex=r"(?:^|\\.)moe\\.(\\d+)(?:\\.|$)",
+                shared_expert_keywords=["shared", "expert"],
+            )
+
+            self._run_collect(run_dir, env)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            self.assertTrue(matrix_path.exists())
+            with matrix_path.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 0)
+
+            unmatched_path = run_dir / "data" / "unmatched_tensors.csv"
+            self.assertTrue(unmatched_path.exists())
+            with unmatched_path.open(newline="") as handle:
+                unmatched_rows = list(csv.DictReader(handle))
+            self.assertEqual(
+                len(unmatched_rows),
+                0,
+                "Alias-like router names should still be excluded before expertish unmatched accounting.",
+            )
+
+            run_health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            extraction_summary = run_health.get("extraction_summary", {})
+            self.assertEqual(int(extraction_summary.get("unmatched_expertish", -1)), 0)
 
     def test_proj_group_canonicalizes_aliases(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

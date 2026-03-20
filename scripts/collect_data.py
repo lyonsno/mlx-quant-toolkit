@@ -296,6 +296,62 @@ process_extracted_banks = _collect_pipeline_mod.process_extracted_banks
 build_index_report_data = _collect_reporting_mod.build_index_report_data
 build_index_summary = _collect_reporting_mod.build_index_summary
 
+
+def _looks_like_moe_proj_tensor(
+    name: str,
+    alias_map: Dict[str, List[str]],
+    expert_re: re.Pattern,
+) -> bool:
+    name_lower = name.lower()
+    moe_namespace_pattern = r"(?:^|\.)moe\."
+    if re.search(moe_namespace_pattern, name_lower) is None:
+        return False
+
+    # Keep the .moe. fallback narrow: only a direct `.moe.<proj-token>` child
+    # or `.moe.<expert-id>.<proj-token>` path counts as expertish. This admits
+    # alias-only names like `.moe.w2.weight` and explicit single-expert tensors
+    # such as `.moe.7.w2.weight` while excluding nested router paths like
+    # `.moe.router.w1.weight`.
+    tokens: set[str] = set()
+    for canonical, aliases in alias_map.items():
+        canonical_token = str(canonical).strip().lower()
+        if canonical_token:
+            tokens.add(canonical_token)
+        for alias in aliases:
+            alias_token = str(alias).strip().lower()
+            if alias_token and not (alias_token.startswith(".") and alias_token.endswith(".")):
+                tokens.add(alias_token)
+
+    for token in tokens:
+        pattern = moe_namespace_pattern + re.escape(token) + r"(?:\.|$)"
+        if re.search(pattern, name_lower):
+            return True
+
+    match = expert_re.search(name)
+    if match is None:
+        return False
+
+    suffix = name_lower[match.end() :]
+    for token in tokens:
+        if re.match(r"(?:\.)?" + re.escape(token) + r"(?:\.|$)", suffix):
+            return True
+    return False
+
+
+def _matches_enabled_rule_candidate(name: str, arr: np.ndarray, rules: List[Rule]) -> bool:
+    # Keep explicit enabled rules authoritative for experts_only admission so
+    # non-strict proj_group names can still reach the extractor that owns the
+    # actual normalization contract.
+    for rule in rules:
+        if not rule.enabled:
+            continue
+        if rule.ndim is not None and arr.ndim != rule.ndim:
+            continue
+        if rule.regex.match(name):
+            return True
+    return False
+
+
 def _mlx_quant_sim(
     bank: np.ndarray,
     schemes: List[Dict[str, Any]],
@@ -656,7 +712,14 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
                 continue
 
             is_shared = _is_shared_expert(name, shared_keywords)
-            is_expertish = ("experts" in name.lower()) or is_shared
+            name_lower = name.lower()
+            matches_enabled_rule = _matches_enabled_rule_candidate(name, arr, rules)
+            is_expertish = (
+                ("experts" in name_lower)
+                or _looks_like_moe_proj_tensor(name, alias_map, expert_re)
+                or is_shared
+                or matches_enabled_rule
+            )
             tensor_key = (str(fpath), name)
 
             if experts_only:
