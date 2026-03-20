@@ -387,3 +387,356 @@ class RunHealthJsonIntegrationTests(unittest.TestCase):
             index_summary = health.get("index_summary", {})
             self.assertIsInstance(index_summary, dict)
             self.assertFalse(index_summary.get("active"))
+
+    def test_collect_data_audits_effectively_empty_moe_collect_in_run_health_and_warnings(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            tensor_name = "model.layers.0.moe.7.down_projj.weight"
+            arr = np.arange(2 * 4 * 3, dtype=np.float32).reshape(2, 4, 3)
+            np.savez(model_dir / "weights.npz", **{tensor_name: arr})
+
+            run_dir = tmp_path / "run"
+            (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+            (run_dir / "data").mkdir(parents=True, exist_ok=True)
+            (run_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "model_id": "test-model",
+                        "run_name": "empty-moe-smoke",
+                        "created_at": "2000-01-01T00:00:00Z",
+                        "version": 2,
+                    },
+                    indent=2,
+                )
+            )
+
+            cfg = {
+                "model_path": str(model_dir),
+                "scan": {
+                    "extensions": [".npz"],
+                    "experts_only": True,
+                    "include_shared_expert": True,
+                    "inventory_all_tensors": True,
+                    "use_safetensors_index_json": False,
+                    "strict_index": False,
+                    "max_files": None,
+                },
+                "parsing": {
+                    "layer_regex": r"(?:^|\.)layers\.(\d+)(?:\.|$)",
+                    "expert_regex": r"(?:^|\.)moe\.(\d+)(?:\.|$)",
+                    "proj_aliases": {},
+                    "shared_expert_keywords": ["shared", "expert"],
+                    "strict_packed_split": True,
+                    "proj_group_strict": False,
+                },
+                "extract_rules": [],
+                "mlx": {"enabled": False, "device": "cpu"},
+                "stats": {
+                    "eps": 1e-12,
+                    "sample_per_matrix": 4,
+                    "sample_seed": 123,
+                    "percentiles_abs": [50.0],
+                    "group_outlier_percentile": 95.0,
+                    "group_sizes_lastdim": [2],
+                },
+                "quant_schemes": [],
+                "output": {"format": "csv", "compression": None},
+                "debug": {"dump_unmatched_tensors": True, "print_progress_every_files": 0},
+            }
+            (run_dir / "analysis_config.json").write_text(json.dumps(cfg, indent=2))
+
+            self._run_collect(run_dir, model_dir, self._env(), check=True)
+
+            write_manifest = json.loads((run_dir / "logs" / "write_manifest.json").read_text())
+            warnings_meta = write_manifest.get("artifacts", {}).get("warnings")
+            self.assertIsNotNone(
+                warnings_meta,
+                "A suspiciously empty experts_only MoE run should emit a warnings artifact instead of silently succeeding.",
+            )
+            warnings_path = self._resolve_manifest_path(run_dir, warnings_meta.get("path"))
+            self.assertTrue(warnings_path.exists())
+            with warnings_path.open(newline="") as handle:
+                warning_rows = list(csv.DictReader(handle))
+            smoke_rows = [
+                row
+                for row in warning_rows
+                if "effectively empty collect" in row.get("warning", "")
+            ]
+            self.assertGreaterEqual(len(smoke_rows), 1)
+
+            health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            self.assertEqual(health.get("status"), "success")
+            outputs = health.get("outputs_written", {})
+            self.assertEqual(outputs.get("matrix_stats_rows"), 0)
+            self.assertEqual(outputs.get("quant_sim_rows"), 0)
+            self.assertTrue(outputs.get("wrote_warnings"))
+
+            smoke_checks = health.get("smoke_checks", {})
+            effectively_empty = smoke_checks.get("effectively_empty_collect", {})
+            self.assertEqual(effectively_empty.get("triggered"), True)
+            self.assertEqual(effectively_empty.get("candidate_tensors_observed"), 1)
+            self.assertIn(tensor_name, effectively_empty.get("candidate_examples", []))
+
+    def test_collect_data_does_not_flag_router_only_empty_run_as_effectively_empty_moe_collect(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            tensor_name = "model.layers.0.moe.router.w1.weight"
+            arr = np.arange(2 * 4 * 3, dtype=np.float32).reshape(2, 4, 3)
+            np.savez(model_dir / "weights.npz", **{tensor_name: arr})
+
+            run_dir = tmp_path / "run"
+            (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+            (run_dir / "data").mkdir(parents=True, exist_ok=True)
+            (run_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "model_id": "test-model",
+                        "run_name": "router-only",
+                        "created_at": "2000-01-01T00:00:00Z",
+                        "version": 2,
+                    },
+                    indent=2,
+                )
+            )
+
+            cfg = {
+                "model_path": str(model_dir),
+                "scan": {
+                    "extensions": [".npz"],
+                    "experts_only": True,
+                    "include_shared_expert": True,
+                    "inventory_all_tensors": True,
+                    "use_safetensors_index_json": False,
+                    "strict_index": False,
+                    "max_files": None,
+                },
+                "parsing": {
+                    "layer_regex": r"(?:^|\.)layers\.(\d+)(?:\.|$)",
+                    "expert_regex": r"(?:^|\.)moe\.(\d+)(?:\.|$)",
+                    "proj_aliases": {
+                        "down_proj": ["down_proj", "w2"],
+                        "gate_proj": ["gate_proj", "w1"],
+                        "up_proj": ["up_proj", "w3"],
+                    },
+                    "shared_expert_keywords": ["shared", "expert"],
+                    "strict_packed_split": True,
+                    "proj_group_strict": False,
+                },
+                "extract_rules": [],
+                "mlx": {"enabled": False, "device": "cpu"},
+                "stats": {
+                    "eps": 1e-12,
+                    "sample_per_matrix": 4,
+                    "sample_seed": 123,
+                    "percentiles_abs": [50.0],
+                    "group_outlier_percentile": 95.0,
+                    "group_sizes_lastdim": [2],
+                },
+                "quant_schemes": [],
+                "output": {"format": "csv", "compression": None},
+                "debug": {"dump_unmatched_tensors": True, "print_progress_every_files": 0},
+            }
+            (run_dir / "analysis_config.json").write_text(json.dumps(cfg, indent=2))
+
+            self._run_collect(run_dir, model_dir, self._env(), check=True)
+
+            write_manifest = json.loads((run_dir / "logs" / "write_manifest.json").read_text())
+            warnings_meta = write_manifest.get("artifacts", {}).get("warnings")
+            if warnings_meta is not None:
+                warnings_path = self._resolve_manifest_path(run_dir, warnings_meta.get("path"))
+                with warnings_path.open(newline="") as handle:
+                    warning_rows = list(csv.DictReader(handle))
+                smoke_rows = [
+                    row
+                    for row in warning_rows
+                    if "effectively empty collect" in row.get("warning", "")
+                ]
+                self.assertEqual(smoke_rows, [])
+
+            health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            smoke_checks = health.get("smoke_checks", {})
+            effectively_empty = smoke_checks.get("effectively_empty_collect", {})
+            self.assertEqual(effectively_empty.get("triggered"), False)
+            self.assertEqual(effectively_empty.get("candidate_tensors_observed"), 0)
+            self.assertEqual(effectively_empty.get("candidate_examples"), [])
+
+    def test_collect_data_does_not_flag_unmatched_expertish_run_when_unmatched_dump_is_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            tensor_name = "model.layers.0.moe.7.down_proj.weight"
+            arr = np.arange(4, dtype=np.float32)
+            np.savez(model_dir / "weights.npz", **{tensor_name: arr})
+
+            run_dir = tmp_path / "run"
+            (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+            (run_dir / "data").mkdir(parents=True, exist_ok=True)
+            (run_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "model_id": "test-model",
+                        "run_name": "unmatched-dump-disabled",
+                        "created_at": "2000-01-01T00:00:00Z",
+                        "version": 2,
+                    },
+                    indent=2,
+                )
+            )
+
+            cfg = {
+                "model_path": str(model_dir),
+                "scan": {
+                    "extensions": [".npz"],
+                    "experts_only": True,
+                    "include_shared_expert": True,
+                    "inventory_all_tensors": True,
+                    "use_safetensors_index_json": False,
+                    "strict_index": False,
+                    "max_files": None,
+                },
+                "parsing": {
+                    "layer_regex": r"(?:^|\.)layers\.(\d+)(?:\.|$)",
+                    "expert_regex": r"(?:^|\.)moe\.(\d+)(?:\.|$)",
+                    "proj_aliases": {
+                        "down_proj": ["down_proj", "w2"],
+                        "gate_proj": ["gate_proj", "w1"],
+                        "up_proj": ["up_proj", "w3"],
+                    },
+                    "shared_expert_keywords": ["shared", "expert"],
+                    "strict_packed_split": True,
+                    "proj_group_strict": False,
+                },
+                "extract_rules": [],
+                "mlx": {"enabled": False, "device": "cpu"},
+                "stats": {
+                    "eps": 1e-12,
+                    "sample_per_matrix": 4,
+                    "sample_seed": 123,
+                    "percentiles_abs": [50.0],
+                    "group_outlier_percentile": 95.0,
+                    "group_sizes_lastdim": [2],
+                },
+                "quant_schemes": [],
+                "output": {"format": "csv", "compression": None},
+                "debug": {"dump_unmatched_tensors": False, "print_progress_every_files": 0},
+            }
+            (run_dir / "analysis_config.json").write_text(json.dumps(cfg, indent=2))
+
+            self._run_collect(run_dir, model_dir, self._env(), check=True)
+
+            write_manifest = json.loads((run_dir / "logs" / "write_manifest.json").read_text())
+            warnings_meta = write_manifest.get("artifacts", {}).get("warnings")
+            if warnings_meta is not None:
+                warnings_path = self._resolve_manifest_path(run_dir, warnings_meta.get("path"))
+                with warnings_path.open(newline="") as handle:
+                    warning_rows = list(csv.DictReader(handle))
+                smoke_rows = [
+                    row
+                    for row in warning_rows
+                    if "effectively empty collect" in row.get("warning", "")
+                ]
+                self.assertEqual(smoke_rows, [])
+
+            health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            extraction = health.get("extraction_summary", {})
+            self.assertEqual(extraction.get("unmatched_expertish"), 1)
+
+            smoke_checks = health.get("smoke_checks", {})
+            effectively_empty = smoke_checks.get("effectively_empty_collect", {})
+            self.assertEqual(effectively_empty.get("triggered"), False)
+            self.assertEqual(effectively_empty.get("candidate_tensors_observed"), 1)
+            self.assertIn(tensor_name, effectively_empty.get("candidate_examples", []))
+
+    def test_collect_data_does_not_flag_numeric_expert_non_projection_suffix_as_effectively_empty(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            tensor_name = "model.layers.0.moe.7.foo.weight"
+            arr = np.arange(2 * 4 * 3, dtype=np.float32).reshape(2, 4, 3)
+            np.savez(model_dir / "weights.npz", **{tensor_name: arr})
+
+            run_dir = tmp_path / "run"
+            (run_dir / "logs").mkdir(parents=True, exist_ok=True)
+            (run_dir / "data").mkdir(parents=True, exist_ok=True)
+            (run_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "model_id": "test-model",
+                        "run_name": "numeric-non-proj",
+                        "created_at": "2000-01-01T00:00:00Z",
+                        "version": 2,
+                    },
+                    indent=2,
+                )
+            )
+
+            cfg = {
+                "model_path": str(model_dir),
+                "scan": {
+                    "extensions": [".npz"],
+                    "experts_only": True,
+                    "include_shared_expert": True,
+                    "inventory_all_tensors": True,
+                    "use_safetensors_index_json": False,
+                    "strict_index": False,
+                    "max_files": None,
+                },
+                "parsing": {
+                    "layer_regex": r"(?:^|\.)layers\.(\d+)(?:\.|$)",
+                    "expert_regex": r"(?:^|\.)moe\.(\d+)(?:\.|$)",
+                    "proj_aliases": {
+                        "down_proj": ["down_proj", "w2"],
+                        "gate_proj": ["gate_proj", "w1"],
+                        "up_proj": ["up_proj", "w3"],
+                    },
+                    "shared_expert_keywords": ["shared", "expert"],
+                    "strict_packed_split": True,
+                    "proj_group_strict": False,
+                },
+                "extract_rules": [],
+                "mlx": {"enabled": False, "device": "cpu"},
+                "stats": {
+                    "eps": 1e-12,
+                    "sample_per_matrix": 4,
+                    "sample_seed": 123,
+                    "percentiles_abs": [50.0],
+                    "group_outlier_percentile": 95.0,
+                    "group_sizes_lastdim": [2],
+                },
+                "quant_schemes": [],
+                "output": {"format": "csv", "compression": None},
+                "debug": {"dump_unmatched_tensors": True, "print_progress_every_files": 0},
+            }
+            (run_dir / "analysis_config.json").write_text(json.dumps(cfg, indent=2))
+
+            self._run_collect(run_dir, model_dir, self._env(), check=True)
+
+            write_manifest = json.loads((run_dir / "logs" / "write_manifest.json").read_text())
+            warnings_meta = write_manifest.get("artifacts", {}).get("warnings")
+            if warnings_meta is not None:
+                warnings_path = self._resolve_manifest_path(run_dir, warnings_meta.get("path"))
+                with warnings_path.open(newline="") as handle:
+                    warning_rows = list(csv.DictReader(handle))
+                smoke_rows = [
+                    row
+                    for row in warning_rows
+                    if "effectively empty collect" in row.get("warning", "")
+                ]
+                self.assertEqual(smoke_rows, [])
+
+            health = json.loads((run_dir / "logs" / "run_health.json").read_text())
+            smoke_checks = health.get("smoke_checks", {})
+            effectively_empty = smoke_checks.get("effectively_empty_collect", {})
+            self.assertEqual(effectively_empty.get("triggered"), False)
+            self.assertEqual(effectively_empty.get("candidate_tensors_observed"), 0)
+            self.assertEqual(effectively_empty.get("candidate_examples"), [])

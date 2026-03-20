@@ -338,6 +338,26 @@ def _looks_like_moe_proj_tensor(
     return False
 
 
+def _looks_like_empty_collect_moe_candidate(name: str, expert_re: re.Pattern) -> bool:
+    name_lower = name.lower()
+    if re.search(r"(?:^|\.)moe\.", name_lower) is None:
+        return False
+
+    match = expert_re.search(name)
+    if match is None:
+        return False
+
+    suffix = name_lower[match.end() :]
+    token_match = re.match(r"(?:\.)?([a-z0-9_]+)\.weight$", suffix)
+    if token_match is None:
+        return False
+
+    token = token_match.group(1)
+    if token in {"w1", "w2", "w3", "down_proj", "gate_proj", "up_proj"}:
+        return True
+    return token.startswith(("down", "gate", "up")) and ("proj" in token)
+
+
 def _matches_enabled_rule_candidate(name: str, arr: np.ndarray, rules: List[Rule]) -> bool:
     # Keep explicit enabled rules authoritative for experts_only admission so
     # non-strict proj_group names can still reach the extractor that owns the
@@ -455,6 +475,8 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
     example_rule_extracted: List[str] = []
     example_fallback_extracted: List[str] = []
     example_unmatched_expertish: List[str] = []
+    smoke_candidate_tensors_observed = 0
+    example_smoke_candidates: List[str] = []
 
     if metadata_enabled:
         meta_mod = _get_metadata_module()
@@ -710,6 +732,10 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
             # only float weights for stats/sims
             if not _is_floatlike_dtype(arr.dtype):
                 continue
+
+            if experts_only and _looks_like_empty_collect_moe_candidate(name, expert_re):
+                smoke_candidate_tensors_observed += 1
+                record_example(example_smoke_candidates, name)
 
             is_shared = _is_shared_expert(name, shared_keywords)
             name_lower = name.lower()
@@ -972,6 +998,29 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
                 "check logs/write_manifest.json."
             )
 
+    effectively_empty_collect_triggered = bool(
+        experts_only
+        and smoke_candidate_tensors_observed > 0
+        and len(matrix_rows) == 0
+        and unmatched_expertish == 0
+    )
+    smoke_checks = {
+        "effectively_empty_collect": {
+            "triggered": effectively_empty_collect_triggered,
+            "candidate_tensors_observed": int(smoke_candidate_tensors_observed),
+            "candidate_examples": list(example_smoke_candidates),
+        }
+    }
+    if effectively_empty_collect_triggered:
+        examples_text = ", ".join(example_smoke_candidates[:3])
+        warn_log.append(
+            "[smoke] effectively empty collect: experts_only=true observed plausible "
+            f"MoE expert candidates={smoke_candidate_tensors_observed} but wrote "
+            "zero matrix_stats rows and recorded zero unmatched expertish tensors. "
+            f"Examples: {examples_text}. "
+            "Check parsing.expert_regex, extract_rules, and projection naming."
+        )
+
     wl_df = pd.DataFrame({"warning": warn_log}) if warn_log else pd.DataFrame()
     if not wl_df.empty:
         # CONTRACT SURFACE: logs/warnings.{parquet|csv} + write_manifest.artifacts["warnings"]
@@ -1060,6 +1109,7 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
             "fallback_extracted": example_fallback_extracted,
             "unmatched_expertish": example_unmatched_expertish,
         },
+        "smoke_checks": smoke_checks,
         "derived_tensor_formats": [
             "<raw_tensor_name>::<proj>",
             "<raw_tensor_name>::split[rows]::<proj>",
