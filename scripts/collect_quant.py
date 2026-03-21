@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import warnings
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -40,6 +41,8 @@ def _get_optional_positive_float_config(cfg: Dict[str, Any], key: str) -> float 
     if key not in cfg:
         return None
     raw_value = cfg[key]
+    if raw_value is None:
+        return None
     if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float, np.integer, np.floating)):
         raise ValueError(f"{key} must be a positive number")
     value = float(raw_value)
@@ -178,6 +181,43 @@ def _gram_cos_drift_sampled_rms(
     return max(row_drift, col_drift)
 
 
+def _mx_array_with_dtype_fallback(
+    mx_mod: Any,
+    array: np.ndarray,
+    dtype_token: Any,
+    fallback_array: np.ndarray | None = None,
+) -> Any:
+    try:
+        accepts_dtype_kw = "dtype" in inspect.signature(mx_mod.array).parameters
+    except (TypeError, ValueError):
+        accepts_dtype_kw = None
+
+    def _array_without_dtype() -> Any:
+        candidate = array if fallback_array is None else fallback_array
+        try:
+            return mx_mod.array(candidate)
+        except Exception:
+            if fallback_array is None or candidate is array:
+                raise
+            if "bfloat16" in str(dtype_token):
+                raise ValueError(
+                    "quant_compute_dtype=bf16 cannot be honored on this mlx.array() "
+                    "runtime because array(..., dtype=...) is unsupported and raw "
+                    "NumPy bfloat16 input is rejected; use quant_compute_dtype=fp16 instead"
+                )
+            raise
+
+    if accepts_dtype_kw is False:
+        return _array_without_dtype()
+
+    try:
+        return mx_mod.array(array, dtype=dtype_token)
+    except TypeError:
+        if accepts_dtype_kw is True:
+            raise
+        return _array_without_dtype()
+
+
 def _mlx_quant_sim(
     bank: np.ndarray,
     schemes: List[Dict[str, Any]],
@@ -228,7 +268,12 @@ def _mlx_quant_sim(
     # rejects NumPy bf16 ndarrays in mx.array(...).
     w = bank.astype(quant_compute_dtype, copy=False)
     mlx_quant_compute_dtype = getattr(mx_mod, quant_compute_dtype_name, quant_compute_dtype)
-    w_mx = mx_mod.array(bank.astype(np.float32, copy=False), dtype=mlx_quant_compute_dtype)
+    w_mx = _mx_array_with_dtype_fallback(
+        mx_mod,
+        bank.astype(np.float32, copy=False),
+        mlx_quant_compute_dtype,
+        fallback_array=w,
+    )
 
     rows = []
     for s in schemes:

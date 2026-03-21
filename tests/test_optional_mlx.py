@@ -172,6 +172,125 @@ class OptionalMlxPipelineTests(unittest.TestCase):
         )
         return stub_root
 
+    def _create_stub_mlx_dtype_sensitive_without_array_dtype_kw(self, root: Path) -> Path:
+        stub_root = root / "stub_mlx_dtype_sensitive_without_array_dtype_kw"
+        pkg_dir = stub_root / "mlx"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+        (pkg_dir / "__init__.py").write_text("")
+        (pkg_dir / "core.py").write_text(
+            "import numpy as np\n"
+            "\n"
+            "bfloat16 = 'bfloat16'\n"
+            "float16 = 'float16'\n"
+            "float32 = 'float32'\n"
+            "\n"
+            "def array(x):\n"
+            "    return np.asarray(x)\n"
+            "\n"
+            "def quantize(w, *_args, mode=None, **_kwargs):\n"
+            "    scales = np.ones((w.shape[0], 1, 1), dtype=np.float32)\n"
+            "    if mode == 'affine':\n"
+            "        biases = np.zeros((w.shape[0], 1, 1), dtype=np.float32)\n"
+            "        return np.array(w), scales, biases\n"
+            "    return np.array(w), scales\n"
+            "\n"
+            "def dequantize(wq, *_args, dtype=None, **_kwargs):\n"
+            "    wq_np = np.array(wq, copy=True)\n"
+            "    if 'float16' in str(wq_np.dtype):\n"
+            "        perturb_value = 0.25\n"
+            "    elif 'float32' in str(wq_np.dtype):\n"
+            "        perturb_value = 0.5\n"
+            "    else:\n"
+            "        raise RuntimeError(f'unexpected quantized dtype: {wq_np.dtype}')\n"
+            "    perturb = np.zeros_like(wq_np, dtype=np.float32)\n"
+            "    perturb[..., 0, 1] = np.float32(perturb_value)\n"
+            "    return wq_np.astype(np.float32, copy=False) + perturb\n"
+            "\n"
+            "def sqrt(x):\n"
+            "    return np.sqrt(x)\n"
+            "\n"
+            "def sum(x, axis=None):\n"
+            "    return np.sum(x, axis=axis)\n"
+            "\n"
+            "def max(x, axis=None):\n"
+            "    return np.max(x, axis=axis)\n"
+            "\n"
+            "def abs(x):\n"
+            "    return np.abs(x)\n"
+            "\n"
+            "def mean(x, axis=None):\n"
+            "    return np.mean(x, axis=axis)\n"
+            "\n"
+            "def eval(*_args):\n"
+            "    return None\n"
+            "\n"
+            "def set_default_device(_device):\n"
+            "    return None\n"
+            "\n"
+            "cpu = object()\n"
+            "gpu = object()\n"
+        )
+        return stub_root
+
+    def _create_stub_mlx_rejects_numpy_bf16_without_array_dtype_kw(self, root: Path) -> Path:
+        stub_root = root / "stub_mlx_rejects_numpy_bf16_without_array_dtype_kw"
+        pkg_dir = stub_root / "mlx"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+        (pkg_dir / "__init__.py").write_text("")
+        (pkg_dir / "core.py").write_text(
+            "import numpy as np\n"
+            "\n"
+            "bfloat16 = 'bfloat16'\n"
+            "float16 = 'float16'\n"
+            "float32 = 'float32'\n"
+            "\n"
+            "def array(x):\n"
+            "    arr = np.asarray(x)\n"
+            "    if 'bfloat16' in str(arr.dtype):\n"
+            "        raise ValueError('Invalid type ndarray received in array initialization')\n"
+            "    return arr\n"
+            "\n"
+            "def quantize(w, *_args, mode=None, **_kwargs):\n"
+            "    scales = np.ones((w.shape[0], 1, 1), dtype=np.float32)\n"
+            "    if mode == 'affine':\n"
+            "        biases = np.zeros((w.shape[0], 1, 1), dtype=np.float32)\n"
+            "        return np.array(w), scales, biases\n"
+            "    return np.array(w), scales\n"
+            "\n"
+            "def dequantize(wq, *_args, dtype=None, **_kwargs):\n"
+            "    wq_np = np.array(wq, copy=True)\n"
+            "    if 'float32' not in str(wq_np.dtype):\n"
+            "        raise RuntimeError(f'unexpected quantized dtype: {wq_np.dtype}')\n"
+            "    perturb = np.zeros_like(wq_np, dtype=np.float32)\n"
+            "    perturb[..., 0, 1] = np.float32(0.125)\n"
+            "    return wq_np.astype(np.float32, copy=False) + perturb\n"
+            "\n"
+            "def sqrt(x):\n"
+            "    return np.sqrt(x)\n"
+            "\n"
+            "def sum(x, axis=None):\n"
+            "    return np.sum(x, axis=axis)\n"
+            "\n"
+            "def max(x, axis=None):\n"
+            "    return np.max(x, axis=axis)\n"
+            "\n"
+            "def abs(x):\n"
+            "    return np.abs(x)\n"
+            "\n"
+            "def mean(x, axis=None):\n"
+            "    return np.mean(x, axis=axis)\n"
+            "\n"
+            "def eval(*_args):\n"
+            "    return None\n"
+            "\n"
+            "def set_default_device(_device):\n"
+            "    return None\n"
+            "\n"
+            "cpu = object()\n"
+            "gpu = object()\n"
+        )
+        return stub_root
+
     def _create_stub_mlx_bf16_api_strict(self, root: Path) -> Path:
         stub_root = root / "stub_mlx_bf16_api_strict"
         pkg_dir = stub_root / "mlx"
@@ -680,6 +799,67 @@ class OptionalMlxPipelineTests(unittest.TestCase):
             self.assertAlmostEqual(fp16_value, 0.25, places=6)
             self.assertAlmostEqual(fp32_value, 0.5, places=6)
 
+    def test_collect_data_with_stub_mlx_success_honors_quant_compute_dtype_when_array_lacks_dtype_kwarg(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir, _, result = self._setup_and_collect(
+                Path(tmp_dir),
+                stub_factory=self._create_stub_mlx_dtype_sensitive_without_array_dtype_kw,
+                cfg_overrides={
+                    "mlx": {"enabled": True, "device": "cpu"},
+                    "quant_schemes": [
+                        {
+                            "name": "s1",
+                            "mode": "symmetric",
+                            "bits": 4,
+                            "group_size": 32,
+                            "enabled": True,
+                        }
+                    ],
+                    "stats": {
+                        "quant_compute_dtype": "fp16",
+                    },
+                },
+                arr=np.array([[[1.0, 0.0], [0.0, 1.0]]], dtype=np.float32),
+            )
+
+            output = (result.stdout or "") + (result.stderr or "")
+            self.assertEqual(result.returncode, 0, f"collect_data failed unexpectedly:\n{output}")
+
+            with (run_dir / "data" / "quant_sim.csv").open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].get("error"), "")
+            self.assertAlmostEqual(float(rows[0]["w_rel_max"]), 0.25, places=6)
+
+    def test_collect_data_with_stub_mlx_default_bf16_fails_closed_when_array_lacks_dtype_kwarg_and_rejects_numpy_bf16(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            _, _, result = self._setup_and_collect(
+                Path(tmp_dir),
+                stub_factory=self._create_stub_mlx_rejects_numpy_bf16_without_array_dtype_kw,
+                cfg_overrides={
+                    "mlx": {"enabled": True, "device": "cpu"},
+                    "quant_schemes": [
+                        {
+                            "name": "s1",
+                            "mode": "symmetric",
+                            "bits": 4,
+                            "group_size": 32,
+                            "enabled": True,
+                        }
+                    ],
+                },
+                arr=np.array([[[1.0, 0.0], [0.0, 1.0]]], dtype=np.float32),
+                check=False,
+            )
+
+            output = (result.stdout or "") + (result.stderr or "")
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("quant_compute_dtype=bf16", output)
+            self.assertIn("array", output)
+            self.assertIn("dtype", output)
+            self.assertIn("fp16", output)
+
     def test_collect_data_with_stub_mlx_success_missing_quant_compute_dtype_preserves_legacy_fp16_behavior(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -772,6 +952,7 @@ class OptionalMlxPipelineTests(unittest.TestCase):
                     },
                 },
                 arr=np.array([[[1e-4, 0.0], [0.0, 0.0]]], dtype=np.float32),
+                check=False,
             )
 
             output = (result.stdout or "") + (result.stderr or "")
@@ -786,7 +967,7 @@ class OptionalMlxPipelineTests(unittest.TestCase):
             self.assertAlmostEqual(float(rows[0]["w_rel_max"]), 0.25, places=6)
             self.assertAlmostEqual(float(rows[0]["w_rel_spectral"]), 0.25, delta=1e-3)
 
-    def test_collect_data_with_stub_mlx_success_missing_rel_den_floor_preserves_legacy_low_norm_inflation(self):
+    def test_collect_data_with_stub_mlx_success_default_init_run_rel_den_floor_stabilizes_low_norm_metrics(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir, _, result = self._setup_and_collect(
                 Path(tmp_dir),
@@ -802,11 +983,82 @@ class OptionalMlxPipelineTests(unittest.TestCase):
                             "enabled": True,
                         }
                     ],
-                    "stats": {
-                        "quant_compute_dtype": "fp16",
-                    },
                 },
                 arr=np.array([[[1e-4, 0.0], [0.0, 0.0]]], dtype=np.float32),
+                check=False,
+            )
+
+            output = (result.stdout or "") + (result.stderr or "")
+            self.assertEqual(result.returncode, 0, f"collect_data failed unexpectedly:\n{output}")
+
+            with (run_dir / "data" / "quant_sim.csv").open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].get("error"), "")
+            self.assertAlmostEqual(float(rows[0]["w_rel_fro"]), 0.125, places=6)
+            self.assertAlmostEqual(float(rows[0]["w_rel_max"]), 0.125, places=6)
+            self.assertAlmostEqual(float(rows[0]["w_rel_spectral"]), 0.125, delta=1e-3)
+
+    def test_collect_data_with_stub_mlx_success_missing_rel_den_floor_preserves_legacy_low_norm_inflation(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            self._write_npz_with_key(
+                model_dir / "weights.npz",
+                "layers.0.experts.0.down_proj.weight",
+                np.array([[[1e-4, 0.0], [0.0, 0.0]]], dtype=np.float32),
+            )
+
+            run_root = tmp_path / "runs"
+            run_root.mkdir(parents=True, exist_ok=True)
+            self._run([
+                sys.executable,
+                str(self.repo_root / "scripts" / "init_run.py"),
+                "--root",
+                str(run_root),
+                "--model-id",
+                "model",
+                "--run-name",
+                "run",
+                "--model-path",
+                str(model_dir),
+            ])
+
+            run_dir = run_root / "model" / "run"
+            cfg_path = run_dir / "analysis_config.json"
+            cfg = json.loads(cfg_path.read_text())
+            cfg["output"]["format"] = "csv"
+            cfg["output"]["compression"] = None
+            cfg["delta_pairs"] = [{"name": "dummy_delta", "a": "scheme_a", "b": "scheme_b"}]
+            cfg["mlx"] = {"enabled": True, "device": "cpu"}
+            cfg["quant_schemes"] = [
+                {
+                    "name": "s1",
+                    "mode": "symmetric",
+                    "bits": 4,
+                    "group_size": 32,
+                    "enabled": True,
+                }
+            ]
+            cfg["stats"]["quant_compute_dtype"] = "fp16"
+            del cfg["stats"]["quant_rel_den_floor"]
+            cfg_path.write_text(json.dumps(cfg, indent=2))
+
+            stub_root = self._create_stub_mlx_dtype_sensitive(tmp_path)
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(stub_root) + os.pathsep + env.get("PYTHONPATH", "")
+            env["PYTHONWARNINGS"] = "default"
+
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "collect_data.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
             )
 
             output = (result.stdout or "") + (result.stderr or "")
@@ -850,6 +1102,43 @@ class OptionalMlxPipelineTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, output)
             self.assertIn("quant_rel_den_floor", output)
             self.assertIn("finite", output)
+
+    def test_collect_data_with_stub_mlx_success_null_rel_den_floor_treated_as_unset(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir, _, result = self._setup_and_collect(
+                Path(tmp_dir),
+                stub_factory=self._create_stub_mlx_dtype_sensitive,
+                cfg_overrides={
+                    "mlx": {"enabled": True, "device": "cpu"},
+                    "quant_schemes": [
+                        {
+                            "name": "s1",
+                            "mode": "symmetric",
+                            "bits": 4,
+                            "group_size": 32,
+                            "enabled": True,
+                        }
+                    ],
+                    "stats": {
+                        "quant_compute_dtype": "fp16",
+                        "quant_rel_den_floor": None,
+                    },
+                },
+                arr=np.array([[[1e-4, 0.0], [0.0, 0.0]]], dtype=np.float32),
+                check=False,
+            )
+
+            output = (result.stdout or "") + (result.stderr or "")
+            self.assertEqual(result.returncode, 0, f"collect_data failed unexpectedly:\n{output}")
+
+            with (run_dir / "data" / "quant_sim.csv").open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].get("error"), "")
+            self.assertAlmostEqual(float(rows[0]["w_rel_fro"]), 2500.0, places=6)
+            self.assertAlmostEqual(float(rows[0]["w_rel_max"]), 2500.0, places=6)
+            self.assertAlmostEqual(float(rows[0]["w_rel_spectral"]), 2500.0, delta=1.0)
 
     def test_collect_data_with_strict_stub_mlx_succeeds_with_default_bf16_init_run_config(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

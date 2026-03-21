@@ -236,6 +236,130 @@ class CollectQuantMetricContractTests(unittest.TestCase):
 
         return StubMx()
 
+    def _stub_mx_dtype_sensitive_without_array_dtype_kw(self):
+        class StubMx:
+            cpu = object()
+            gpu = object()
+            bfloat16 = "bfloat16"
+            float16 = "float16"
+            float32 = "float32"
+
+            def __init__(self):
+                self.last_array_dtype = None
+                self.last_dequantize_wq_dtype = None
+                self.last_dequantize_dtype_arg = None
+
+            def set_default_device(self, _device):
+                return None
+
+            def array(self, x):
+                arr = np.asarray(x)
+                self.last_array_dtype = str(arr.dtype)
+                return arr
+
+            def quantize(self, w_mx, *_args, mode, **_kwargs):
+                scales = np.ones((w_mx.shape[0], 1, 1), dtype=np.float32)
+                if mode == "affine":
+                    biases = np.zeros((w_mx.shape[0], 1, 1), dtype=np.float32)
+                    return np.array(w_mx), scales, biases
+                return np.array(w_mx), scales
+
+            def dequantize(self, wq, *_args, dtype=None, **_kwargs):
+                wq_np = np.array(wq, copy=True)
+                self.last_dequantize_wq_dtype = str(wq_np.dtype)
+                self.last_dequantize_dtype_arg = str(dtype)
+                if "float16" in self.last_dequantize_wq_dtype:
+                    perturb_value = 0.25
+                elif "float32" in self.last_dequantize_wq_dtype:
+                    perturb_value = 0.5
+                else:
+                    raise AssertionError(f"Unexpected quantized dtype: {self.last_dequantize_wq_dtype}")
+                perturb = np.zeros_like(wq_np, dtype=np.float32)
+                perturb[..., 0, 1] = np.float32(perturb_value)
+                return wq_np.astype(np.float32, copy=False) + perturb
+
+            def sqrt(self, x):
+                return np.sqrt(x)
+
+            def sum(self, x, axis=None):
+                return np.sum(x, axis=axis)
+
+            def max(self, x, axis=None):
+                return np.max(x, axis=axis)
+
+            def abs(self, x):
+                return np.abs(x)
+
+            def mean(self, x, axis=None):
+                return np.mean(x, axis=axis)
+
+            def eval(self, *_args):
+                return None
+
+        return StubMx()
+
+    def _stub_mx_rejects_numpy_bf16_without_array_dtype_kw(self):
+        class StubMx:
+            cpu = object()
+            gpu = object()
+            bfloat16 = "bfloat16"
+            float16 = "float16"
+            float32 = "float32"
+
+            def __init__(self):
+                self.last_array_dtype = None
+                self.last_dequantize_wq_dtype = None
+                self.last_dequantize_dtype_arg = None
+
+            def set_default_device(self, _device):
+                return None
+
+            def array(self, x):
+                arr = np.asarray(x)
+                if "bfloat16" in str(arr.dtype):
+                    raise ValueError("Invalid type ndarray received in array initialization")
+                self.last_array_dtype = str(arr.dtype)
+                return arr
+
+            def quantize(self, w_mx, *_args, mode, **_kwargs):
+                scales = np.ones((w_mx.shape[0], 1, 1), dtype=np.float32)
+                if mode == "affine":
+                    biases = np.zeros((w_mx.shape[0], 1, 1), dtype=np.float32)
+                    return np.array(w_mx), scales, biases
+                return np.array(w_mx), scales
+
+            def dequantize(self, wq, *_args, dtype=None, **_kwargs):
+                wq_np = np.array(wq, copy=True)
+                self.last_dequantize_wq_dtype = str(wq_np.dtype)
+                self.last_dequantize_dtype_arg = str(dtype)
+                if "float32" in self.last_dequantize_wq_dtype:
+                    perturb_value = 0.125
+                else:
+                    raise AssertionError(f"Unexpected quantized dtype: {self.last_dequantize_wq_dtype}")
+                perturb = np.zeros_like(wq_np, dtype=np.float32)
+                perturb[..., 0, 1] = np.float32(perturb_value)
+                return wq_np.astype(np.float32, copy=False) + perturb
+
+            def sqrt(self, x):
+                return np.sqrt(x)
+
+            def sum(self, x, axis=None):
+                return np.sum(x, axis=axis)
+
+            def max(self, x, axis=None):
+                return np.max(x, axis=axis)
+
+            def abs(self, x):
+                return np.abs(x)
+
+            def mean(self, x, axis=None):
+                return np.mean(x, axis=axis)
+
+            def eval(self, *_args):
+                return None
+
+        return StubMx()
+
     def _stub_mx_vectorized_rel_metrics_sensitive(self):
         class _Tensor:
             __array_priority__ = 1000
@@ -509,6 +633,55 @@ class CollectQuantMetricContractTests(unittest.TestCase):
         self.assertAlmostEqual(float(df.iloc[0]["w_rel_max"]), 5.0, places=6)
         self.assertAlmostEqual(float(df.iloc[1]["w_rel_max"]), 3.0, places=6)
 
+    def test_mlx_quant_sim_no_dtype_array_fallback_preserves_explicit_fp16_compute_dtype(self):
+        mod = _load_module("collect_quant", self.scripts_dir / "collect_quant.py")
+
+        bank = np.array([[[1.0, 0.0], [0.0, 1.0]]], dtype=np.float32)
+        schemes = [{"name": "q4", "mode": "symmetric", "bits": 4, "group_size": 32, "enabled": True}]
+        stub_mx = self._stub_mx_dtype_sensitive_without_array_dtype_kw()
+
+        df, warns = mod._mlx_quant_sim(
+            bank,
+            schemes,
+            {
+                "eps": 1e-12,
+                "sample_seed": 1337,
+                "quant_compute_dtype": "fp16",
+            },
+            device="cpu",
+            load_mlx=lambda: stub_mx,
+        )
+
+        self.assertEqual(warns, [])
+        self.assertEqual(len(df), 1)
+        self.assertEqual(stub_mx.last_array_dtype, "float16")
+        self.assertEqual(stub_mx.last_dequantize_wq_dtype, "float16")
+        self.assertIn("float16", stub_mx.last_dequantize_dtype_arg)
+        self.assertAlmostEqual(float(df.iloc[0]["w_rel_max"]), 0.25, places=6)
+
+    def test_mlx_quant_sim_no_dtype_array_fallback_rejects_bf16_when_raw_numpy_bf16_is_unsupported(self):
+        mod = _load_module("collect_quant", self.scripts_dir / "collect_quant.py")
+
+        bank = np.array([[[1.0, 0.0], [0.0, 1.0]]], dtype=np.float32)
+        schemes = [{"name": "q4", "mode": "symmetric", "bits": 4, "group_size": 32, "enabled": True}]
+        stub_mx = self._stub_mx_rejects_numpy_bf16_without_array_dtype_kw()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"quant_compute_dtype=bf16.*array.*dtype.*fp16",
+        ):
+            mod._mlx_quant_sim(
+                bank,
+                schemes,
+                {
+                    "eps": 1e-12,
+                    "sample_seed": 1337,
+                    "quant_compute_dtype": "bf16",
+                },
+                device="cpu",
+                load_mlx=lambda: stub_mx,
+            )
+
     def test_mlx_quant_sim_applies_explicit_rel_den_floor_to_low_norm_tensors(self):
         mod = _load_module("collect_quant", self.scripts_dir / "collect_quant.py")
 
@@ -548,6 +721,32 @@ class CollectQuantMetricContractTests(unittest.TestCase):
                 "eps": 1e-12,
                 "sample_seed": 1337,
                 "quant_compute_dtype": "fp16",
+            },
+            device="cpu",
+            load_mlx=self._stub_mx_dtype_sensitive,
+        )
+
+        self.assertEqual(warns, [])
+        self.assertEqual(len(df), 1)
+        row = df.iloc[0]
+        self.assertAlmostEqual(float(row["w_rel_fro"]), 2500.0, places=6)
+        self.assertAlmostEqual(float(row["w_rel_max"]), 2500.0, places=6)
+        self.assertAlmostEqual(float(row["w_rel_spectral"]), 2500.0, delta=1.0)
+
+    def test_mlx_quant_sim_null_rel_den_floor_treated_as_unset(self):
+        mod = _load_module("collect_quant", self.scripts_dir / "collect_quant.py")
+
+        bank = np.array([[[1e-4, 0.0], [0.0, 0.0]]], dtype=np.float32)
+        schemes = [{"name": "q4", "mode": "symmetric", "bits": 4, "group_size": 32, "enabled": True}]
+
+        df, warns = mod._mlx_quant_sim(
+            bank,
+            schemes,
+            {
+                "eps": 1e-12,
+                "sample_seed": 1337,
+                "quant_compute_dtype": "fp16",
+                "quant_rel_den_floor": None,
             },
             device="cpu",
             load_mlx=self._stub_mx_dtype_sensitive,
