@@ -584,6 +584,15 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
                     else:
                         warn_log.append(f"[meta] no recognized fields in {cfg_path}")
 
+    if mlx_enabled and schemes:
+        if _load_mlx() is None:
+            msg = "mlx is not importable; skipping quantization simulations"
+            warnings.warn(msg)
+            warn_log.append(f"[quant_sim] {msg}")
+            mlx_enabled = False
+        else:
+            _validate_enabled_quant_scheme_names(schemes)
+
     index_path = None
     index_path_found = None
     weight_map = None
@@ -681,15 +690,6 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
             "Pass the directory to scan the indexed shard set."
         )
     failure_ctx["index_active"] = bool(index_used_for_scan)
-
-    if mlx_enabled and schemes:
-        if _load_mlx() is None:
-            msg = "mlx is not importable; skipping quantization simulations"
-            warnings.warn(msg)
-            warn_log.append(f"[quant_sim] {msg}")
-            mlx_enabled = False
-        else:
-            _validate_enabled_quant_scheme_names(schemes)
 
     files: List[Path] = []
     missing_shards: set[str] = set()
