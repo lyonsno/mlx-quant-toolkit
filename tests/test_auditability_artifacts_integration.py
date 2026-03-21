@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from safetensors.numpy import save_file
 
 
 class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
@@ -87,6 +88,9 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             "gpu = object()\n"
         )
         return stub_root
+
+    def _write_safetensors(self, path: Path, tensors: dict[str, np.ndarray]) -> None:
+        save_file(tensors, str(path))
 
     def _run_collect(self, run_dir: Path, model_path: Path | None, env: dict, check: bool):
         cmd = [
@@ -704,6 +708,90 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             self.assertEqual(index_info.get("found"), False)
             self.assertEqual(index_info.get("active"), False)
             self.assertIsNone(index_info.get("index_path"))
+
+    def test_collect_data_duplicate_quant_scheme_failure_with_file_anchor_keeps_index_active_false(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+
+            tensor_name = "layers.0.experts.0.up_proj.weight"
+            arr = np.arange(4, dtype=np.float32).reshape(2, 2)
+            shard_ok = model_dir / "shard_ok.safetensors"
+            self._write_safetensors(shard_ok, {tensor_name: arr})
+
+            index_path = model_dir / "model.safetensors.index.json"
+            index_path.write_text(
+                json.dumps(
+                    {
+                        "weight_map": {tensor_name: shard_ok.name},
+                        "metadata": {"format": "pt"},
+                    },
+                    indent=2,
+                )
+            )
+
+            run_dir = self._init_run_dir(tmp_path, "duplicate-quant-schemes-file-anchor-hard-fail")
+            self._write_config(
+                run_dir,
+                shard_ok,
+                use_index=True,
+                output_format="csv",
+                compression=None,
+            )
+            cfg_path = run_dir / "analysis_config.json"
+            cfg = json.loads(cfg_path.read_text())
+            cfg["scan"]["extensions"] = [".safetensors"]
+            cfg["mlx"] = {"enabled": True, "device": "cpu"}
+            cfg["quant_schemes"] = [
+                {
+                    "name": "dup",
+                    "mode": "symmetric",
+                    "bits": 4,
+                    "group_size": 32,
+                    "enabled": True,
+                },
+                {
+                    "name": "dup",
+                    "mode": "symmetric",
+                    "bits": 8,
+                    "group_size": 64,
+                    "enabled": True,
+                },
+            ]
+            cfg_path.write_text(json.dumps(cfg, indent=2))
+
+            stub_root = self._create_stub_mlx_success(tmp_path)
+            env = self._env()
+            env["PYTHONPATH"] = str(stub_root) + os.pathsep + env.get("PYTHONPATH", "")
+
+            result = self._run_collect(run_dir, None, env, check=False)
+            self.assertNotEqual(result.returncode, 0)
+
+            failure_path = run_dir / "logs" / "run_failure.json"
+            self.assertTrue(failure_path.exists())
+
+            payload = json.loads(failure_path.read_text())
+            self._assert_run_failure_payload_basics(payload, run_dir)
+
+            error_info = payload.get("error", {})
+            self.assertEqual(error_info.get("type"), "ValueError")
+            self.assertIn("duplicate enabled quant_schemes names", str(error_info.get("message")))
+
+            index_info = payload.get("index", {})
+            self._assert_required_keys_subset(
+                index_info,
+                {"status", "searched", "found", "active", "index_path"},
+                "run_failure.index",
+            )
+            self.assertEqual(index_info.get("status"), "active")
+            self.assertEqual(index_info.get("searched"), True)
+            self.assertEqual(index_info.get("found"), True)
+            self.assertEqual(index_info.get("active"), False)
+            self.assertEqual(
+                Path(index_info.get("index_path")).resolve(),
+                index_path.resolve(),
+            )
 
     def test_collect_data_hard_fail_bad_npz_writes_exception_traceback_in_run_failure(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

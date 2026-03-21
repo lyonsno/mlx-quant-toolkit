@@ -654,12 +654,17 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
                 # If find_fn returned a candidate path that does not exist, keep found False.
 
     index_parsed = bool(index_active and weight_map is not None)
+    index_used_for_scan = bool(index_parsed)
+    index_discovered_but_ignored_due_to_file_model_path = False
+    if model_path_is_file and index_parsed:
+        index_used_for_scan = False
+        index_discovered_but_ignored_due_to_file_model_path = True
     failure_ctx.update(
         {
             "index_status": index_status,
             "index_searched": bool(index_searched),
             "index_found": bool(index_found),
-            "index_active": bool(index_parsed),
+            "index_active": bool(index_used_for_scan),
             "index_path": index_path,
             "index_path_found": index_path_found,
             "index_error": index_error,
@@ -686,12 +691,8 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
     if strict_index and use_index and not index_parsed:
         raise SystemExit(f"strict_index requires an active index (status: {index_status})")
 
-    index_used_for_scan = bool(index_parsed)
-    index_discovered_but_ignored_due_to_file_model_path = False
     # Treat file model_path as an explicit anchor; index metadata is for reporting only.
-    if model_path_is_file and index_parsed:
-        index_used_for_scan = False
-        index_discovered_but_ignored_due_to_file_model_path = True
+    if index_discovered_but_ignored_due_to_file_model_path:
         print(
             f"[index] index found at {index_path}; "
             "but model_path is a file; scanning only the anchor file. "
