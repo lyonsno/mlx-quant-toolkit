@@ -86,6 +86,20 @@ QUANT_SIM_ARTIFACT_COLUMNS = [
 ]
 
 
+def _validate_enabled_quant_scheme_names(schemes: List[Dict[str, Any]]) -> None:
+    seen: Set[str] = set()
+    duplicates: Set[str] = set()
+    for scheme in schemes:
+        name = str(scheme.get("name"))
+        if name in seen:
+            duplicates.add(name)
+            continue
+        seen.add(name)
+    if duplicates:
+        dup_text = ", ".join(sorted(duplicates))
+        raise ValueError(f"duplicate enabled quant_schemes names: {dup_text}")
+
+
 def _validate_quant_sim_df_schema(qs_df: pd.DataFrame) -> None:
     required_columns = QUANT_SIM_ARTIFACT_COLUMNS + [
         col for col in QUANT_SIM_COLUMNS if col != "expert_id_in_bank"
@@ -468,6 +482,7 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
     mlx_device = mlx_cfg.get("device", "cpu")
 
     schemes = [s for s in cfg.get("quant_schemes", []) if s.get("enabled", True)]
+    _validate_enabled_quant_scheme_names(schemes)
     cfg_stats = cfg["stats"]
     cache_idx_dir = run_dir / "cache" / "sampled_indices"
 
