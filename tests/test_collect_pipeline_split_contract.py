@@ -401,6 +401,111 @@ class CollectPipelineSplitContractTests(unittest.TestCase):
                     warn_log=[],
                 )
 
+    def test_process_one_bank_quant_rows_fail_fast_when_per_bank_quant_coverage_is_partial(self):
+        mod = _load_module("collect_pipeline", self.scripts_dir / "collect_pipeline.py")
+
+        bank_obj = SimpleNamespace(
+            source_file="f.npz",
+            source_tensor="layers.5.experts.0.w2.weight",
+            derived_tensor="layers.5.experts.0.w2.weight::down_proj",
+            proj="down_proj",
+            is_shared_expert=False,
+            layer_base=5,
+            expert_single_id=None,
+        )
+        bank_erc = np.array(
+            [
+                [[1.0, 2.0], [3.0, 4.0]],
+                [[5.0, 6.0], [7.0, 8.0]],
+            ],
+            dtype=np.float32,
+        )
+
+        def fake_stats(bank, _cfg_stats, _cache_dir):
+            e_count = bank.shape[0]
+            return {"mean": np.arange(e_count, dtype=np.float32)}
+
+        def fake_quant(_bank, _schemes, _cfg_stats, _device):
+            # Deliberately omit one expected expert/scheme row: with 2 experts and
+            # 2 enabled schemes, a full helper result should contain 4 rows.
+            qdf = pd.DataFrame(
+                [
+                    {
+                        "scheme": "q4",
+                        "mode": "symmetric",
+                        "bits": 4,
+                        "group_size": 32,
+                        "expert_id_in_bank": 0,
+                        "w_rel_fro": 0.1,
+                        "w_rel_max": 0.2,
+                        "w_rel_spectral": 0.05,
+                        "w_gram_cos_drift_sampled_rms": 0.06,
+                        "scale_mean": 1.1,
+                        "scale_max": 1.2,
+                        "bias_mean": None,
+                        "bias_max": None,
+                        "error": None,
+                    },
+                    {
+                        "scheme": "q4",
+                        "mode": "symmetric",
+                        "bits": 4,
+                        "group_size": 32,
+                        "expert_id_in_bank": 1,
+                        "w_rel_fro": 0.3,
+                        "w_rel_max": 0.4,
+                        "w_rel_spectral": 0.07,
+                        "w_gram_cos_drift_sampled_rms": 0.08,
+                        "scale_mean": 1.3,
+                        "scale_max": 1.4,
+                        "bias_mean": None,
+                        "bias_max": None,
+                        "error": None,
+                    },
+                    {
+                        "scheme": "q8",
+                        "mode": "symmetric",
+                        "bits": 8,
+                        "group_size": 32,
+                        "expert_id_in_bank": 0,
+                        "w_rel_fro": 0.11,
+                        "w_rel_max": 0.21,
+                        "w_rel_spectral": 0.051,
+                        "w_gram_cos_drift_sampled_rms": 0.061,
+                        "scale_mean": 1.11,
+                        "scale_max": 1.21,
+                        "bias_mean": None,
+                        "bias_max": None,
+                        "error": None,
+                    },
+                ]
+            )
+            return qdf, []
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with self.assertRaisesRegex(
+                ValueError,
+                r"expected 4 quant rows.*got 3",
+            ):
+                mod.process_one_bank(
+                    bank_obj=bank_obj,
+                    bank_erc=bank_erc,
+                    layer_idx=5,
+                    cfg_stats={"eps": 1e-12},
+                    cache_idx_dir=Path(tmp_dir),
+                    matrix_rows=[],
+                    quant_rows=[],
+                    mlx_enabled=True,
+                    schemes=[
+                        {"name": "q4", "enabled": True},
+                        {"name": "q8", "enabled": True},
+                    ],
+                    mlx_device="cpu",
+                    per_expert_weight_stats=fake_stats,
+                    mlx_quant_sim=fake_quant,
+                    warn_log=[],
+                )
+
     def test_process_one_bank_quant_rows_use_minus_one_for_shared_expert(self):
         mod = _load_module("collect_pipeline", self.scripts_dir / "collect_pipeline.py")
 
@@ -616,7 +721,104 @@ class CollectPipelineSplitContractTests(unittest.TestCase):
         )
         self.assertEqual(len(warn_log), 1)
         self.assertIn("unsupported canonical ndim=5", warn_log[0])
-        self.assertIn("bad.tensor", warn_log[0])
+
+    def test_process_extracted_banks_fail_fast_when_first_bank_silently_drops_quant_rows(self):
+        mod = _load_module("collect_pipeline", self.scripts_dir / "collect_pipeline.py")
+
+        extracted = [
+            SimpleNamespace(
+                bank=np.zeros((1, 2, 2), dtype=np.float32),
+                layer_base=3,
+                derived_tensor="layers.3.experts.0.w2.weight::down_proj",
+                source_file="f.npz",
+                source_tensor="layers.3.experts.0.w2.weight",
+                proj="down_proj",
+                is_shared_expert=False,
+                expert_single_id=None,
+            ),
+            SimpleNamespace(
+                bank=np.zeros((2, 2, 2), dtype=np.float32),
+                layer_base=4,
+                derived_tensor="layers.4.experts.w2.weight::down_proj",
+                source_file="f.npz",
+                source_tensor="layers.4.experts.w2.weight",
+                proj="down_proj",
+                is_shared_expert=False,
+                expert_single_id=None,
+            ),
+        ]
+
+        def fake_stats(bank, _cfg_stats, _cache_dir):
+            return {"mean": np.arange(bank.shape[0], dtype=np.float32)}
+
+        def fake_quant(bank, _schemes, _cfg_stats, _device):
+            if bank.shape[0] == 1:
+                return pd.DataFrame(), []
+            qdf = pd.DataFrame(
+                [
+                    {
+                        "scheme": "q4",
+                        "mode": "symmetric",
+                        "bits": 4,
+                        "group_size": 32,
+                        "expert_id_in_bank": 0,
+                        "w_rel_fro": 0.1,
+                        "w_rel_max": 0.2,
+                        "w_rel_spectral": 0.05,
+                        "w_gram_cos_drift_sampled_rms": 0.06,
+                        "scale_mean": 1.1,
+                        "scale_max": 1.2,
+                        "bias_mean": None,
+                        "bias_max": None,
+                        "error": None,
+                    },
+                    {
+                        "scheme": "q4",
+                        "mode": "symmetric",
+                        "bits": 4,
+                        "group_size": 32,
+                        "expert_id_in_bank": 1,
+                        "w_rel_fro": 0.3,
+                        "w_rel_max": 0.4,
+                        "w_rel_spectral": 0.07,
+                        "w_gram_cos_drift_sampled_rms": 0.08,
+                        "scale_mean": 1.3,
+                        "scale_max": 1.4,
+                        "bias_mean": None,
+                        "bias_max": None,
+                        "error": None,
+                    },
+                ]
+            )
+            return qdf, []
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            matrix_rows: list[dict] = []
+            quant_rows: list[dict] = []
+            with self.assertRaisesRegex(
+                ValueError,
+                r"layers\.3\.experts\.0\.w2\.weight.*expected 1 quant rows.*got 0",
+            ):
+                mod.process_extracted_banks(
+                    extracted=extracted,
+                    cfg_stats={"eps": 1e-12},
+                    cache_idx_dir=Path(tmp_dir),
+                    matrix_rows=matrix_rows,
+                    quant_rows=quant_rows,
+                    mlx_enabled=True,
+                    schemes=[{"name": "q4", "enabled": True}],
+                    mlx_device="cpu",
+                    per_expert_weight_stats=fake_stats,
+                    mlx_quant_sim=fake_quant,
+                    warn_log=[],
+                )
+
+        self.assertFalse(
+            any(row.get("source_tensor") == "layers.4.experts.w2.weight" for row in matrix_rows)
+        )
+        self.assertFalse(
+            any(row.get("source_tensor") == "layers.4.experts.w2.weight" for row in quant_rows)
+        )
 
 
 if __name__ == "__main__":

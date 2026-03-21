@@ -47,9 +47,20 @@ def _merge_quant_row_fields(dst: Dict[str, Any], qr: pd.Series) -> None:
         dst[key] = value
 
 
-def _validate_quant_helper_df(qdf: pd.DataFrame) -> None:
-    if qdf.empty:
-        return
+def _validate_quant_helper_df(
+    qdf: pd.DataFrame,
+    *,
+    source_tensor: str,
+    e_count: int,
+    enabled_scheme_count: int,
+) -> None:
+    expected_rows = e_count * enabled_scheme_count
+    actual_rows = int(len(qdf))
+    if actual_rows != expected_rows:
+        raise ValueError(
+            f"quant_sim helper output for {source_tensor} expected {expected_rows} "
+            f"quant rows but got {actual_rows}"
+        )
     if "expert_id_in_bank" not in qdf.columns:
         raise ValueError("quant_sim helper output is missing required join column: expert_id_in_bank")
 
@@ -112,11 +123,17 @@ def process_one_bank(
             row[k] = float(v[e]) if np.ndim(v) == 1 else float(v)
         matrix_rows.append(row)
 
-    if mlx_enabled and schemes:
+    enabled_scheme_count = sum(1 for s in schemes if s.get("enabled", True))
+    if mlx_enabled and enabled_scheme_count > 0:
         qdf, warns = mlx_quant_sim(bank_erc, schemes, cfg_stats, mlx_device)
         if warn_log is not None:
             warn_log.extend(warns)
-        _validate_quant_helper_df(qdf)
+        _validate_quant_helper_df(
+            qdf,
+            source_tensor=bank_obj.source_tensor,
+            e_count=e_count,
+            enabled_scheme_count=enabled_scheme_count,
+        )
 
         for _, qr in qdf.iterrows():
             e_in_bank = int(qr["expert_id_in_bank"])
