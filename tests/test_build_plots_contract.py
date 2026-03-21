@@ -761,6 +761,133 @@ class BuildPlotsContractTests(unittest.TestCase):
             self.assertEqual(entry.get("path"), "plots/layer/quant_sim__w_rel_max_by_proj_and_scheme.png")
             self.assertEqual(entry.get("error"), "")
 
+    def test_build_plots_quant_error_views_accept_extended_quant_sim_metric_columns(self):
+        self._assert_build_plots_entrypoint_exists()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            fake_env = self._fake_matplotlib_env(Path(tmp_dir))
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_minimal_run_config(
+                run_dir,
+                plots={
+                    "expert_layer_heatmaps": {
+                        "enabled": True,
+                        "source_artifact": "quant_sim",
+                        "metric": "w_gram_cos_drift_sampled_rms",
+                    },
+                    "quant_error_layer_lines": {
+                        "enabled": True,
+                        "source_artifact": "quant_sim",
+                        "metric": "w_rel_spectral",
+                    },
+                },
+            )
+
+            # Contract: direct quant plots must stay metric-generic for additive quant_sim columns.
+            # Keep the legacy w_rel_* columns absent so the test fails if plotting falls back to them.
+            self._write_csv(
+                data_dir / "quant_sim.csv",
+                fieldnames=[
+                    "layer",
+                    "expert_id",
+                    "proj",
+                    "scheme",
+                    "w_rel_spectral",
+                    "w_gram_cos_drift_sampled_rms",
+                ],
+                rows=[
+                    {
+                        "layer": 0,
+                        "expert_id": 0,
+                        "proj": "a_proj",
+                        "scheme": "q4",
+                        "w_rel_spectral": 0.10,
+                        "w_gram_cos_drift_sampled_rms": 0.20,
+                    },
+                    {
+                        "layer": 1,
+                        "expert_id": 0,
+                        "proj": "a_proj",
+                        "scheme": "q4",
+                        "w_rel_spectral": 0.20,
+                        "w_gram_cos_drift_sampled_rms": 0.30,
+                    },
+                    {
+                        "layer": 0,
+                        "expert_id": 1,
+                        "proj": "a_proj",
+                        "scheme": "q4",
+                        "w_rel_spectral": 0.30,
+                        "w_gram_cos_drift_sampled_rms": 0.40,
+                    },
+                    {
+                        "layer": 1,
+                        "expert_id": 1,
+                        "proj": "a_proj",
+                        "scheme": "q4",
+                        "w_rel_spectral": 0.40,
+                        "w_gram_cos_drift_sampled_rms": 0.50,
+                    },
+                    {
+                        "layer": 0,
+                        "expert_id": 0,
+                        "proj": "a_proj",
+                        "scheme": "q6",
+                        "w_rel_spectral": 0.06,
+                        "w_gram_cos_drift_sampled_rms": 0.07,
+                    },
+                    {
+                        "layer": 1,
+                        "expert_id": 0,
+                        "proj": "a_proj",
+                        "scheme": "q6",
+                        "w_rel_spectral": 0.08,
+                        "w_gram_cos_drift_sampled_rms": 0.09,
+                    },
+                    {
+                        "layer": 0,
+                        "expert_id": 0,
+                        "proj": "b_proj",
+                        "scheme": "q4",
+                        "w_rel_spectral": 0.50,
+                        "w_gram_cos_drift_sampled_rms": 0.60,
+                    },
+                    {
+                        "layer": 1,
+                        "expert_id": 0,
+                        "proj": "b_proj",
+                        "scheme": "q4",
+                        "w_rel_spectral": 0.60,
+                        "w_gram_cos_drift_sampled_rms": 0.70,
+                    },
+                ],
+            )
+
+            result = self._run_build_plots(run_dir, env=fake_env)
+            output = (result.stdout or "") + (result.stderr or "")
+            self.assertEqual(result.returncode, 0, f"build_plots failed unexpectedly:\n{output}")
+
+            actual_pngs = sorted(path.relative_to(run_dir).as_posix() for path in (run_dir / "plots").rglob("*.png"))
+            self.assertEqual(
+                actual_pngs,
+                [
+                    "plots/expert_layer_heatmaps/a_proj__q4__w_gram_cos_drift_sampled_rms.png",
+                    "plots/expert_layer_heatmaps/a_proj__q6__w_gram_cos_drift_sampled_rms.png",
+                    "plots/expert_layer_heatmaps/b_proj__q4__w_gram_cos_drift_sampled_rms.png",
+                    "plots/layer/quant_sim__w_rel_spectral_by_proj_and_scheme.png",
+                ],
+            )
+
+            manifest_path = run_dir / "logs" / "plots_write_manifest.json"
+            self.assertTrue(manifest_path.exists(), f"Expected plots manifest missing: {manifest_path}")
+            manifest = self._read_json(manifest_path)
+            artifacts = manifest.get("artifacts", {})
+            self.assertIn("quant_sim__expert_layer_heatmap__a_proj__q4__w_gram_cos_drift_sampled_rms", artifacts)
+            self.assertIn("quant_sim__expert_layer_heatmap__a_proj__q6__w_gram_cos_drift_sampled_rms", artifacts)
+            self.assertIn("quant_sim__expert_layer_heatmap__b_proj__q4__w_gram_cos_drift_sampled_rms", artifacts)
+            self.assertIn("quant_sim__w_rel_spectral_by_proj_and_scheme", artifacts)
+
     def test_build_plots_quant_error_views_do_not_touch_matrix_stats_when_quant_source_selected(self):
         self._assert_build_plots_entrypoint_exists()
         with tempfile.TemporaryDirectory() as tmp_dir:

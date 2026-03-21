@@ -88,6 +88,9 @@ class CollectDataHelperModuleSplitContractTests(unittest.TestCase):
         self.assertIs(collect_data._per_expert_weight_stats, collect_stats._per_expert_weight_stats)
         self.assertIs(collect_data._iter_tensors_from_file, collect_io._iter_tensors_from_file)
         self.assertEqual(collect_data.QUANT_SIM_COLUMNS, collect_quant.QUANT_SIM_COLUMNS)
+        self.assertIn("w_rel_spectral", collect_data.QUANT_SIM_COLUMNS)
+        self.assertIn("w_gram_cos_drift_sampled_rms", collect_data.QUANT_SIM_COLUMNS)
+        self.assertNotIn("w_gram_cos_drift_sampled_max", collect_data.QUANT_SIM_COLUMNS)
         self.assertTrue(callable(collect_data._mlx_quant_sim))
         self.assertTrue(callable(collect_quant._mlx_quant_sim))
 

@@ -253,6 +253,9 @@ class CollectPipelineSplitContractTests(unittest.TestCase):
                         "expert_id_in_bank": 0,
                         "w_rel_fro": 0.1,
                         "w_rel_max": 0.2,
+                        "w_rel_spectral": 0.05,
+                        "w_gram_cos_drift_sampled_rms": 0.06,
+                        "helper_debug_note": "first helper note",
                         "scale_mean": 1.1,
                         "scale_max": 1.2,
                         "bias_mean": None,
@@ -267,6 +270,9 @@ class CollectPipelineSplitContractTests(unittest.TestCase):
                         "expert_id_in_bank": 1,
                         "w_rel_fro": 0.3,
                         "w_rel_max": 0.4,
+                        "w_rel_spectral": 0.07,
+                        "w_gram_cos_drift_sampled_rms": 0.08,
+                        "helper_debug_note": "second helper note",
                         "scale_mean": 1.3,
                         "scale_max": 1.4,
                         "bias_mean": None,
@@ -318,15 +324,21 @@ class CollectPipelineSplitContractTests(unittest.TestCase):
         self.assertEqual(first["group_size"], 32)
         self.assertEqual(first["w_rel_fro"], 0.1)
         self.assertEqual(first["w_rel_max"], 0.2)
+        self.assertEqual(first["w_rel_spectral"], 0.05)
+        self.assertEqual(first["w_gram_cos_drift_sampled_rms"], 0.06)
         self.assertEqual(first["scale_mean"], 1.1)
         self.assertEqual(first["scale_max"], 1.2)
         self.assertIsNone(first["bias_mean"])
         self.assertIsNone(first["bias_max"])
         self.assertIsNone(first["error"])
+        self.assertNotIn("helper_debug_note", first)
 
         second = quant_rows[1]
         self.assertEqual(second["expert_id"], 1)
+        self.assertEqual(second["w_rel_spectral"], 0.07)
+        self.assertEqual(second["w_gram_cos_drift_sampled_rms"], 0.08)
         self.assertEqual(second["error"], "stub error")
+        self.assertNotIn("helper_debug_note", second)
 
     def test_process_one_bank_quant_rows_use_minus_one_for_shared_expert(self):
         mod = _load_module("collect_pipeline", self.scripts_dir / "collect_pipeline.py")

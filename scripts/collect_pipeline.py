@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -13,6 +15,36 @@ def record_example(dst: List[str], value: str, limit: int = 25) -> None:
     if len(dst) >= limit:
         return
     dst.append(value)
+
+
+def _load_quant_public_columns() -> tuple[str, ...]:
+    path = Path(__file__).with_name("collect_quant.py")
+    module_name = "collect_quant"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        existing_file = getattr(existing, "__file__", None)
+        if existing_file is not None and Path(existing_file).resolve() == path.resolve():
+            return tuple(existing.QUANT_SIM_COLUMNS)
+
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load quant helper module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return tuple(module.QUANT_SIM_COLUMNS)
+
+
+_PUBLIC_QUANT_SIM_COLUMNS = frozenset(_load_quant_public_columns())
+
+
+def _merge_quant_row_fields(dst: Dict[str, Any], qr: pd.Series) -> None:
+    for key, value in qr.items():
+        if key == "expert_id_in_bank":
+            continue
+        if key not in _PUBLIC_QUANT_SIM_COLUMNS:
+            continue
+        dst[key] = value
 
 
 def process_one_bank(
@@ -87,31 +119,20 @@ def process_one_bank(
             else:
                 exp_id = int(e_in_bank)
 
-            quant_rows.append(
-                {
-                    "file": bank_obj.source_file,
-                    "source_tensor": bank_obj.source_tensor,
-                    "derived_tensor": bank_obj.derived_tensor,
-                    "layer": layer_val,
-                    "block4": block4,
-                    "proj": bank_obj.proj,
-                    "expert_id": exp_id,
-                    "is_shared_expert": bool(bank_obj.is_shared_expert),
-                    "rows": int(rows),
-                    "cols": int(cols),
-                    "scheme": qr["scheme"],
-                    "mode": qr["mode"],
-                    "bits": qr["bits"],
-                    "group_size": qr["group_size"],
-                    "w_rel_fro": qr["w_rel_fro"],
-                    "w_rel_max": qr["w_rel_max"],
-                    "scale_mean": qr["scale_mean"],
-                    "scale_max": qr["scale_max"],
-                    "bias_mean": qr["bias_mean"],
-                    "bias_max": qr["bias_max"],
-                    "error": qr["error"],
-                }
-            )
+            quant_row = {
+                "file": bank_obj.source_file,
+                "source_tensor": bank_obj.source_tensor,
+                "derived_tensor": bank_obj.derived_tensor,
+                "layer": layer_val,
+                "block4": block4,
+                "proj": bank_obj.proj,
+                "expert_id": exp_id,
+                "is_shared_expert": bool(bank_obj.is_shared_expert),
+                "rows": int(rows),
+                "cols": int(cols),
+            }
+            _merge_quant_row_fields(quant_row, qr)
+            quant_rows.append(quant_row)
 
 
 def process_extracted_banks(

@@ -28,7 +28,8 @@ Top-level keys:
 ### Data (`data/`)
 - `tensor_inventory.*`: one row per observed tensor (`file`, `tensor_name`, `dtype`, `shape`, `ndim`, `nbytes`, plus `in_index`/`index_shard` if index active)
 - `matrix_stats.*`: one row per extracted expert matrix (`file`, `source_tensor`, `derived_tensor`, `layer`, `block4`, `proj`, `expert_id`, `is_routed_expert`, `is_shared_expert`, `rows`, `cols`, `dtype`, `mean_abs`, `max_abs`, `p99_abs`, `g32_*` outlier ratios)
-- `quant_sim.*`: one row per (expert, scheme) (`file`, `source_tensor`, `derived_tensor`, `layer`, `block4`, `proj`, `expert_id`, `is_shared_expert`, `scheme`, `mode`, `bits`, `group_size`, `w_rel_fro`, `w_rel_max`, `scale_*`, `bias_*`, `error`)
+- `quant_sim.*`: one row per (expert, scheme) (`file`, `source_tensor`, `derived_tensor`, `layer`, `block4`, `proj`, `expert_id`, `is_shared_expert`, `scheme`, `mode`, `bits`, `group_size`, `w_rel_fro`, `w_rel_max`, `w_rel_spectral`, `w_gram_cos_drift_sampled_rms`, `scale_*`, `bias_*`, `error`)
+  - Current March 2026 scope note: the new quant metrics are present in raw `quant_sim` and direct `build_plots.py` quant views, but are not yet aggregated into `B_quant_*` / `B_quant_deltas.*`.
 - `unmatched_tensors.*` (optional): tensors that matched expertish heuristics but failed extraction
 
 ### Tables (`tables/`)

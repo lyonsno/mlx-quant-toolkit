@@ -52,6 +52,56 @@ class OptionalMlxPipelineTests(unittest.TestCase):
         )
         return stub_root
 
+    def _create_stub_mlx_success(self, root: Path) -> Path:
+        stub_root = root / "stub_mlx_success"
+        pkg_dir = stub_root / "mlx"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+        (pkg_dir / "__init__.py").write_text("")
+        (pkg_dir / "core.py").write_text(
+            "import numpy as np\n"
+            "\n"
+            "def array(x):\n"
+            "    return np.array(x)\n"
+            "\n"
+            "def quantize(w, *_args, mode=None, **_kwargs):\n"
+            "    scales = np.ones((w.shape[0], 1, 1), dtype=np.float32)\n"
+            "    if mode == 'affine':\n"
+            "        biases = np.zeros((w.shape[0], 1, 1), dtype=np.float32)\n"
+            "        return np.array(w), scales, biases\n"
+            "    return np.array(w), scales\n"
+            "\n"
+            "def dequantize(wq, *_args, **_kwargs):\n"
+            "    wq_np = np.array(wq, copy=True)\n"
+            "    perturb = np.zeros_like(wq_np, dtype=np.float16)\n"
+            "    perturb[..., 0, 1] = np.float16(0.1)\n"
+            "    return wq_np + perturb\n"
+            "\n"
+            "def sqrt(x):\n"
+            "    return np.sqrt(x)\n"
+            "\n"
+            "def sum(x, axis=None):\n"
+            "    return np.sum(x, axis=axis)\n"
+            "\n"
+            "def max(x, axis=None):\n"
+            "    return np.max(x, axis=axis)\n"
+            "\n"
+            "def abs(x):\n"
+            "    return np.abs(x)\n"
+            "\n"
+            "def mean(x, axis=None):\n"
+            "    return np.mean(x, axis=axis)\n"
+            "\n"
+            "def eval(*_args):\n"
+            "    return None\n"
+            "\n"
+            "def set_default_device(_device):\n"
+            "    return None\n"
+            "\n"
+            "cpu = object()\n"
+            "gpu = object()\n"
+        )
+        return stub_root
+
     def _run(self, args, env=None, check=True):
         return subprocess.run(
             args,
@@ -346,8 +396,55 @@ class OptionalMlxPipelineTests(unittest.TestCase):
             self.assertTrue(matrix_path.exists())
             self.assertTrue(quant_path.exists())
 
-            header = quant_path.read_text().splitlines()[0]
-            self.assertIn("scheme", header)
+            with quant_path.open(newline="") as handle:
+                reader = csv.DictReader(handle)
+                fieldnames = list(reader.fieldnames or [])
+
+            self.assertIn("scheme", fieldnames)
+            self.assertIn("w_rel_spectral", fieldnames)
+            self.assertIn("w_gram_cos_drift_sampled_rms", fieldnames)
+            self.assertNotIn("w_gram_cos_drift_sampled_max", fieldnames)
+
+    def test_collect_data_with_stub_mlx_success_emits_renamed_quant_metric_schema(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            arr = np.arange(32, dtype=np.float32).reshape(2, 4, 4)
+            run_dir, _, result = self._setup_and_collect(
+                Path(tmp_dir),
+                stub_factory=self._create_stub_mlx_success,
+                cfg_overrides={
+                    "mlx": {"enabled": True, "device": "cpu"},
+                    "quant_schemes": [
+                        {
+                            "name": "s1",
+                            "mode": "symmetric",
+                            "bits": 4,
+                            "group_size": 32,
+                            "enabled": True,
+                        }
+                    ],
+                },
+                arr=arr,
+            )
+
+            output = (result.stdout or "") + (result.stderr or "")
+            self.assertEqual(result.returncode, 0, f"collect_data failed unexpectedly:\n{output}")
+
+            quant_path = run_dir / "data" / "quant_sim.csv"
+            self.assertTrue(quant_path.exists())
+
+            with quant_path.open(newline="") as handle:
+                reader = csv.DictReader(handle)
+                fieldnames = list(reader.fieldnames or [])
+                rows = list(reader)
+
+            self.assertIn("w_rel_spectral", fieldnames)
+            self.assertIn("w_gram_cos_drift_sampled_rms", fieldnames)
+            self.assertNotIn("w_gram_cos_drift_sampled_max", fieldnames)
+            self.assertEqual(len(rows), arr.shape[0])
+            for row in rows:
+                self.assertNotEqual(row.get("w_rel_spectral"), "")
+                self.assertNotEqual(row.get("w_gram_cos_drift_sampled_rms"), "")
+                self.assertEqual(row.get("error"), "")
 
     def test_collect_data_emits_unmatched_tensors_when_no_proj_match(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1022,6 +1119,9 @@ class OptionalMlxPipelineTests(unittest.TestCase):
 
             with quant_path.open(newline="") as handle:
                 reader = csv.DictReader(handle)
+                self.assertIn("w_rel_spectral", list(reader.fieldnames or []))
+                self.assertIn("w_gram_cos_drift_sampled_rms", list(reader.fieldnames or []))
+                self.assertNotIn("w_gram_cos_drift_sampled_max", list(reader.fieldnames or []))
                 rows = list(reader)
 
             self.assertEqual(len(rows), arr.shape[0])
@@ -1030,6 +1130,8 @@ class OptionalMlxPipelineTests(unittest.TestCase):
             self.assertEqual(sorted(expert_ids), list(range(arr.shape[0])))
 
             for row in rows:
+                self.assertEqual(row.get("w_rel_spectral"), "")
+                self.assertEqual(row.get("w_gram_cos_drift_sampled_rms"), "")
                 self.assertIn("stub quantize fail", row.get("error", ""))
 
 
