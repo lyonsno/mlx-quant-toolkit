@@ -52,8 +52,9 @@ def _validate_quant_helper_df(
     *,
     source_tensor: str,
     e_count: int,
-    enabled_scheme_count: int,
+    enabled_scheme_names: tuple[str, ...],
 ) -> None:
+    enabled_scheme_count = len(enabled_scheme_names)
     expected_rows = e_count * enabled_scheme_count
     actual_rows = int(len(qdf))
     if actual_rows != expected_rows:
@@ -63,6 +64,43 @@ def _validate_quant_helper_df(
         )
     if "expert_id_in_bank" not in qdf.columns:
         raise ValueError("quant_sim helper output is missing required join column: expert_id_in_bank")
+    if "scheme" not in qdf.columns:
+        raise ValueError("quant_sim helper output is missing required coverage column: scheme")
+
+    expected_pairs = {
+        (scheme_name, expert_id)
+        for scheme_name in enabled_scheme_names
+        for expert_id in range(e_count)
+    }
+    seen_pairs: set[tuple[str, int]] = set()
+    for _, qr in qdf.iterrows():
+        scheme_name = str(qr["scheme"])
+        raw_expert_id = qr["expert_id_in_bank"]
+        expert_id = int(raw_expert_id)
+        if expert_id < 0 or expert_id >= e_count:
+            raise ValueError(
+                f"quant_sim helper output for {source_tensor} has expert_id_in_bank "
+                f"out of range: {expert_id}"
+            )
+        if scheme_name not in enabled_scheme_names:
+            raise ValueError(
+                f"quant_sim helper output for {source_tensor} has unexpected scheme: {scheme_name}"
+            )
+        pair = (scheme_name, expert_id)
+        if pair in seen_pairs:
+            raise ValueError(
+                f"quant_sim helper output for {source_tensor} has duplicate coverage for "
+                f"scheme={scheme_name} expert_id_in_bank={expert_id}"
+            )
+        seen_pairs.add(pair)
+
+    missing_pairs = expected_pairs - seen_pairs
+    if missing_pairs:
+        scheme_name, expert_id = sorted(missing_pairs)[0]
+        raise ValueError(
+            f"quant_sim helper output for {source_tensor} is missing coverage for "
+            f"scheme={scheme_name} expert_id_in_bank={expert_id}"
+        )
 
 
 def process_one_bank(
@@ -123,8 +161,8 @@ def process_one_bank(
             row[k] = float(v[e]) if np.ndim(v) == 1 else float(v)
         matrix_rows.append(row)
 
-    enabled_scheme_count = sum(1 for s in schemes if s.get("enabled", True))
-    if mlx_enabled and enabled_scheme_count > 0:
+    enabled_scheme_names = tuple(str(s.get("name")) for s in schemes if s.get("enabled", True))
+    if mlx_enabled and enabled_scheme_names:
         qdf, warns = mlx_quant_sim(bank_erc, schemes, cfg_stats, mlx_device)
         if warn_log is not None:
             warn_log.extend(warns)
@@ -132,7 +170,7 @@ def process_one_bank(
             qdf,
             source_tensor=bank_obj.source_tensor,
             e_count=e_count,
-            enabled_scheme_count=enabled_scheme_count,
+            enabled_scheme_names=enabled_scheme_names,
         )
 
         for _, qr in qdf.iterrows():

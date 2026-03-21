@@ -506,6 +506,211 @@ class CollectPipelineSplitContractTests(unittest.TestCase):
                     warn_log=[],
                 )
 
+    def test_process_one_bank_quant_rows_fail_fast_when_coverage_pairs_are_duplicated(self):
+        mod = _load_module("collect_pipeline", self.scripts_dir / "collect_pipeline.py")
+
+        bank_obj = SimpleNamespace(
+            source_file="f.npz",
+            source_tensor="layers.5.experts.0.w2.weight",
+            derived_tensor="layers.5.experts.0.w2.weight::down_proj",
+            proj="down_proj",
+            is_shared_expert=False,
+            layer_base=5,
+            expert_single_id=None,
+        )
+        bank_erc = np.array(
+            [
+                [[1.0, 2.0], [3.0, 4.0]],
+                [[5.0, 6.0], [7.0, 8.0]],
+            ],
+            dtype=np.float32,
+        )
+
+        def fake_stats(bank, _cfg_stats, _cache_dir):
+            e_count = bank.shape[0]
+            return {"mean": np.arange(e_count, dtype=np.float32)}
+
+        def fake_quant(_bank, _schemes, _cfg_stats, _device):
+            # Row count alone looks complete here: 2 experts * 2 schemes = 4 rows.
+            # But q4 expert 0 is duplicated, so q4 expert 1 is silently missing.
+            qdf = pd.DataFrame(
+                [
+                    {
+                        "scheme": "q4",
+                        "mode": "symmetric",
+                        "bits": 4,
+                        "group_size": 32,
+                        "expert_id_in_bank": 0,
+                        "w_rel_fro": 0.1,
+                        "w_rel_max": 0.2,
+                        "w_rel_spectral": 0.05,
+                        "w_gram_cos_drift_sampled_rms": 0.06,
+                        "scale_mean": 1.1,
+                        "scale_max": 1.2,
+                        "bias_mean": None,
+                        "bias_max": None,
+                        "error": None,
+                    },
+                    {
+                        "scheme": "q4",
+                        "mode": "symmetric",
+                        "bits": 4,
+                        "group_size": 32,
+                        "expert_id_in_bank": 0,
+                        "w_rel_fro": 0.11,
+                        "w_rel_max": 0.21,
+                        "w_rel_spectral": 0.051,
+                        "w_gram_cos_drift_sampled_rms": 0.061,
+                        "scale_mean": 1.11,
+                        "scale_max": 1.21,
+                        "bias_mean": None,
+                        "bias_max": None,
+                        "error": None,
+                    },
+                    {
+                        "scheme": "q8",
+                        "mode": "symmetric",
+                        "bits": 8,
+                        "group_size": 32,
+                        "expert_id_in_bank": 0,
+                        "w_rel_fro": 0.3,
+                        "w_rel_max": 0.4,
+                        "w_rel_spectral": 0.07,
+                        "w_gram_cos_drift_sampled_rms": 0.08,
+                        "scale_mean": 1.3,
+                        "scale_max": 1.4,
+                        "bias_mean": None,
+                        "bias_max": None,
+                        "error": None,
+                    },
+                    {
+                        "scheme": "q8",
+                        "mode": "symmetric",
+                        "bits": 8,
+                        "group_size": 32,
+                        "expert_id_in_bank": 1,
+                        "w_rel_fro": 0.31,
+                        "w_rel_max": 0.41,
+                        "w_rel_spectral": 0.071,
+                        "w_gram_cos_drift_sampled_rms": 0.081,
+                        "scale_mean": 1.31,
+                        "scale_max": 1.41,
+                        "bias_mean": None,
+                        "bias_max": None,
+                        "error": None,
+                    },
+                ]
+            )
+            return qdf, []
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with self.assertRaisesRegex(
+                ValueError,
+                r"layers\.5\.experts\.0\.w2\.weight.*duplicate.*q4.*expert_id_in_bank=0",
+            ):
+                mod.process_one_bank(
+                    bank_obj=bank_obj,
+                    bank_erc=bank_erc,
+                    layer_idx=5,
+                    cfg_stats={"eps": 1e-12},
+                    cache_idx_dir=Path(tmp_dir),
+                    matrix_rows=[],
+                    quant_rows=[],
+                    mlx_enabled=True,
+                    schemes=[
+                        {"name": "q4", "enabled": True},
+                        {"name": "q8", "enabled": True},
+                    ],
+                    mlx_device="cpu",
+                    per_expert_weight_stats=fake_stats,
+                    mlx_quant_sim=fake_quant,
+                    warn_log=[],
+                )
+
+    def test_process_one_bank_quant_rows_fail_fast_when_expert_id_in_bank_is_out_of_range(self):
+        mod = _load_module("collect_pipeline", self.scripts_dir / "collect_pipeline.py")
+
+        bank_obj = SimpleNamespace(
+            source_file="f.npz",
+            source_tensor="layers.5.experts.0.w2.weight",
+            derived_tensor="layers.5.experts.0.w2.weight::down_proj",
+            proj="down_proj",
+            is_shared_expert=False,
+            layer_base=5,
+            expert_single_id=None,
+        )
+        bank_erc = np.array(
+            [
+                [[1.0, 2.0], [3.0, 4.0]],
+                [[5.0, 6.0], [7.0, 8.0]],
+            ],
+            dtype=np.float32,
+        )
+
+        def fake_stats(bank, _cfg_stats, _cache_dir):
+            e_count = bank.shape[0]
+            return {"mean": np.arange(e_count, dtype=np.float32)}
+
+        def fake_quant(_bank, _schemes, _cfg_stats, _device):
+            qdf = pd.DataFrame(
+                [
+                    {
+                        "scheme": "q4",
+                        "mode": "symmetric",
+                        "bits": 4,
+                        "group_size": 32,
+                        "expert_id_in_bank": 0,
+                        "w_rel_fro": 0.1,
+                        "w_rel_max": 0.2,
+                        "w_rel_spectral": 0.05,
+                        "w_gram_cos_drift_sampled_rms": 0.06,
+                        "scale_mean": 1.1,
+                        "scale_max": 1.2,
+                        "bias_mean": None,
+                        "bias_max": None,
+                        "error": None,
+                    },
+                    {
+                        "scheme": "q4",
+                        "mode": "symmetric",
+                        "bits": 4,
+                        "group_size": 32,
+                        "expert_id_in_bank": 2,
+                        "w_rel_fro": 0.3,
+                        "w_rel_max": 0.4,
+                        "w_rel_spectral": 0.07,
+                        "w_gram_cos_drift_sampled_rms": 0.08,
+                        "scale_mean": 1.3,
+                        "scale_max": 1.4,
+                        "bias_mean": None,
+                        "bias_max": None,
+                        "error": None,
+                    },
+                ]
+            )
+            return qdf, []
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with self.assertRaisesRegex(
+                ValueError,
+                r"layers\.5\.experts\.0\.w2\.weight.*expert_id_in_bank.*out of range.*2",
+            ):
+                mod.process_one_bank(
+                    bank_obj=bank_obj,
+                    bank_erc=bank_erc,
+                    layer_idx=5,
+                    cfg_stats={"eps": 1e-12},
+                    cache_idx_dir=Path(tmp_dir),
+                    matrix_rows=[],
+                    quant_rows=[],
+                    mlx_enabled=True,
+                    schemes=[{"name": "q4", "enabled": True}],
+                    mlx_device="cpu",
+                    per_expert_weight_stats=fake_stats,
+                    mlx_quant_sim=fake_quant,
+                    warn_log=[],
+                )
+
     def test_process_one_bank_quant_rows_use_minus_one_for_shared_expert(self):
         mod = _load_module("collect_pipeline", self.scripts_dir / "collect_pipeline.py")
 
