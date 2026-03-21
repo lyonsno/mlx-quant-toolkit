@@ -750,6 +750,107 @@ class OptionalMlxPipelineTests(unittest.TestCase):
             self.assertEqual(rows[0].get("error"), "")
             self.assertAlmostEqual(float(rows[0]["w_rel_max"]), 0.25, places=6)
 
+    def test_collect_data_with_stub_mlx_success_applies_quant_rel_den_floor_from_analysis_config(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir, _, result = self._setup_and_collect(
+                Path(tmp_dir),
+                stub_factory=self._create_stub_mlx_dtype_sensitive,
+                cfg_overrides={
+                    "mlx": {"enabled": True, "device": "cpu"},
+                    "quant_schemes": [
+                        {
+                            "name": "s1",
+                            "mode": "symmetric",
+                            "bits": 4,
+                            "group_size": 32,
+                            "enabled": True,
+                        }
+                    ],
+                    "stats": {
+                        "quant_compute_dtype": "fp16",
+                        "quant_rel_den_floor": 1.0,
+                    },
+                },
+                arr=np.array([[[1e-4, 0.0], [0.0, 0.0]]], dtype=np.float32),
+            )
+
+            output = (result.stdout or "") + (result.stderr or "")
+            self.assertEqual(result.returncode, 0, f"collect_data failed unexpectedly:\n{output}")
+
+            with (run_dir / "data" / "quant_sim.csv").open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].get("error"), "")
+            self.assertAlmostEqual(float(rows[0]["w_rel_fro"]), 0.25, places=6)
+            self.assertAlmostEqual(float(rows[0]["w_rel_max"]), 0.25, places=6)
+            self.assertAlmostEqual(float(rows[0]["w_rel_spectral"]), 0.25, delta=1e-3)
+
+    def test_collect_data_with_stub_mlx_success_missing_rel_den_floor_preserves_legacy_low_norm_inflation(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir, _, result = self._setup_and_collect(
+                Path(tmp_dir),
+                stub_factory=self._create_stub_mlx_dtype_sensitive,
+                cfg_overrides={
+                    "mlx": {"enabled": True, "device": "cpu"},
+                    "quant_schemes": [
+                        {
+                            "name": "s1",
+                            "mode": "symmetric",
+                            "bits": 4,
+                            "group_size": 32,
+                            "enabled": True,
+                        }
+                    ],
+                    "stats": {
+                        "quant_compute_dtype": "fp16",
+                    },
+                },
+                arr=np.array([[[1e-4, 0.0], [0.0, 0.0]]], dtype=np.float32),
+            )
+
+            output = (result.stdout or "") + (result.stderr or "")
+            self.assertEqual(result.returncode, 0, f"collect_data failed unexpectedly:\n{output}")
+
+            with (run_dir / "data" / "quant_sim.csv").open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].get("error"), "")
+            self.assertAlmostEqual(float(rows[0]["w_rel_fro"]), 2500.0, places=6)
+            self.assertAlmostEqual(float(rows[0]["w_rel_max"]), 2500.0, places=6)
+            self.assertAlmostEqual(float(rows[0]["w_rel_spectral"]), 2500.0, delta=1.0)
+
+    def test_collect_data_with_stub_mlx_rejects_non_finite_quant_rel_den_floor_from_analysis_config(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            _, _, result = self._setup_and_collect(
+                Path(tmp_dir),
+                stub_factory=self._create_stub_mlx_dtype_sensitive,
+                cfg_overrides={
+                    "mlx": {"enabled": True, "device": "cpu"},
+                    "quant_schemes": [
+                        {
+                            "name": "s1",
+                            "mode": "symmetric",
+                            "bits": 4,
+                            "group_size": 32,
+                            "enabled": True,
+                        }
+                    ],
+                    "stats": {
+                        "quant_compute_dtype": "fp16",
+                        "quant_rel_den_floor": float("nan"),
+                    },
+                },
+                arr=np.array([[[1e-4, 0.0], [0.0, 0.0]]], dtype=np.float32),
+                check=False,
+            )
+
+            output = (result.stdout or "") + (result.stderr or "")
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("quant_rel_den_floor", output)
+            self.assertIn("finite", output)
+
     def test_collect_data_with_strict_stub_mlx_succeeds_with_default_bf16_init_run_config(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir, _, result = self._setup_and_collect(

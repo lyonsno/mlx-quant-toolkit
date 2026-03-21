@@ -509,6 +509,105 @@ class CollectQuantMetricContractTests(unittest.TestCase):
         self.assertAlmostEqual(float(df.iloc[0]["w_rel_max"]), 5.0, places=6)
         self.assertAlmostEqual(float(df.iloc[1]["w_rel_max"]), 3.0, places=6)
 
+    def test_mlx_quant_sim_applies_explicit_rel_den_floor_to_low_norm_tensors(self):
+        mod = _load_module("collect_quant", self.scripts_dir / "collect_quant.py")
+
+        bank = np.array([[[1e-4, 0.0], [0.0, 0.0]]], dtype=np.float32)
+        schemes = [{"name": "q4", "mode": "symmetric", "bits": 4, "group_size": 32, "enabled": True}]
+
+        df, warns = mod._mlx_quant_sim(
+            bank,
+            schemes,
+            {
+                "eps": 1e-12,
+                "sample_seed": 1337,
+                "quant_compute_dtype": "fp16",
+                "quant_rel_den_floor": 1.0,
+            },
+            device="cpu",
+            load_mlx=self._stub_mx_dtype_sensitive,
+        )
+
+        self.assertEqual(warns, [])
+        self.assertEqual(len(df), 1)
+        row = df.iloc[0]
+        self.assertAlmostEqual(float(row["w_rel_fro"]), 0.25, places=6)
+        self.assertAlmostEqual(float(row["w_rel_max"]), 0.25, places=6)
+        self.assertAlmostEqual(float(row["w_rel_spectral"]), 0.25, delta=1e-3)
+
+    def test_mlx_quant_sim_missing_rel_den_floor_preserves_legacy_low_norm_inflation(self):
+        mod = _load_module("collect_quant", self.scripts_dir / "collect_quant.py")
+
+        bank = np.array([[[1e-4, 0.0], [0.0, 0.0]]], dtype=np.float32)
+        schemes = [{"name": "q4", "mode": "symmetric", "bits": 4, "group_size": 32, "enabled": True}]
+
+        df, warns = mod._mlx_quant_sim(
+            bank,
+            schemes,
+            {
+                "eps": 1e-12,
+                "sample_seed": 1337,
+                "quant_compute_dtype": "fp16",
+            },
+            device="cpu",
+            load_mlx=self._stub_mx_dtype_sensitive,
+        )
+
+        self.assertEqual(warns, [])
+        self.assertEqual(len(df), 1)
+        row = df.iloc[0]
+        self.assertAlmostEqual(float(row["w_rel_fro"]), 2500.0, places=6)
+        self.assertAlmostEqual(float(row["w_rel_max"]), 2500.0, places=6)
+        self.assertAlmostEqual(float(row["w_rel_spectral"]), 2500.0, delta=1.0)
+
+    def test_mlx_quant_sim_rejects_invalid_quant_rel_den_floor(self):
+        mod = _load_module("collect_quant", self.scripts_dir / "collect_quant.py")
+
+        bank = np.array([[[1.0, 0.0], [0.0, 1.0]]], dtype=np.float32)
+        schemes = [{"name": "q4", "mode": "symmetric", "bits": 4, "group_size": 32, "enabled": True}]
+
+        for bad_value in (0, -1.0):
+            with self.subTest(bad_value=bad_value):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"quant_rel_den_floor.*positive",
+                ):
+                    mod._mlx_quant_sim(
+                        bank,
+                        schemes,
+                        {"eps": 1e-12, "quant_rel_den_floor": bad_value},
+                        device="cpu",
+                        load_mlx=self._stub_mx,
+                    )
+
+        for bad_value in ("oops", True):
+            with self.subTest(bad_value=bad_value):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"quant_rel_den_floor.*number",
+                ):
+                    mod._mlx_quant_sim(
+                        bank,
+                        schemes,
+                        {"eps": 1e-12, "quant_rel_den_floor": bad_value},
+                        device="cpu",
+                        load_mlx=self._stub_mx,
+                    )
+
+        for bad_value in (float("nan"), float("inf")):
+            with self.subTest(bad_value=bad_value):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"quant_rel_den_floor.*finite",
+                ):
+                    mod._mlx_quant_sim(
+                        bank,
+                        schemes,
+                        {"eps": 1e-12, "quant_rel_den_floor": bad_value},
+                        device="cpu",
+                        load_mlx=self._stub_mx,
+                    )
+
     def test_mlx_quant_sim_rejects_unsupported_quant_compute_dtype(self):
         mod = _load_module("collect_quant", self.scripts_dir / "collect_quant.py")
 

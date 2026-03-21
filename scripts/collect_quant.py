@@ -36,6 +36,20 @@ def _get_positive_int_config(cfg: Dict[str, Any], key: str, default: int) -> int
     return value
 
 
+def _get_optional_positive_float_config(cfg: Dict[str, Any], key: str) -> float | None:
+    if key not in cfg:
+        return None
+    raw_value = cfg[key]
+    if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float, np.integer, np.floating)):
+        raise ValueError(f"{key} must be a positive number")
+    value = float(raw_value)
+    if not np.isfinite(value):
+        raise ValueError(f"{key} must be a finite positive number")
+    if value <= 0:
+        raise ValueError(f"{key} must be a positive number")
+    return value
+
+
 def _resolve_quant_compute_dtype(cfg: Dict[str, Any]) -> tuple[Any, str]:
     # Backward-compat bridge: legacy configs without this key keep the old
     # implicit fp16 behavior, while fresh init_run templates write explicit bf16.
@@ -186,6 +200,7 @@ def _mlx_quant_sim(
         "quant_gram_sample_k",
         _DEFAULT_QUANT_GRAM_SAMPLE_K,
     )
+    rel_den_floor = _get_optional_positive_float_config(cfg_stats, "quant_rel_den_floor")
     quant_compute_dtype, quant_compute_dtype_name = _resolve_quant_compute_dtype(cfg_stats)
     sample_seed = int(cfg_stats.get("sample_seed", 1337))
     warns: List[str] = []
@@ -246,11 +261,20 @@ def _mlx_quant_sim(
 
             num = mx_mod.sqrt(mx_mod.sum(diff * diff, axis=(1, 2)))
             den = mx_mod.sqrt(mx_mod.sum(w_mx * w_mx, axis=(1, 2))) + eps
+            if rel_den_floor is not None:
+                if hasattr(mx_mod, "maximum"):
+                    den = mx_mod.maximum(den, rel_den_floor)
+                else:
+                    den = np.maximum(np.array(den), rel_den_floor)
             rel_fro = num / den
 
-            rel_max = mx_mod.max(mx_mod.abs(diff), axis=(1, 2)) / (
-                mx_mod.max(mx_mod.abs(w_mx), axis=(1, 2)) + eps
-            )
+            rel_max_den = mx_mod.max(mx_mod.abs(w_mx), axis=(1, 2)) + eps
+            if rel_den_floor is not None:
+                if hasattr(mx_mod, "maximum"):
+                    rel_max_den = mx_mod.maximum(rel_max_den, rel_den_floor)
+                else:
+                    rel_max_den = np.maximum(np.array(rel_max_den), rel_den_floor)
+            rel_max = mx_mod.max(mx_mod.abs(diff), axis=(1, 2)) / rel_max_den
 
             # scale/bias stats (useful for diagnosing "why is this matrix hard?")
             # Keep this placeholder expression for parity with existing behavior.
@@ -284,9 +308,12 @@ def _mlx_quant_sim(
             for e in range(e_count):
                 w_e = w[e].astype(np.float32, copy=False)
                 w_hat_e = np.array(w_hat[e]).astype(np.float32)
+                spectral_den = _spectral_norm_estimate(w_e, eps, spectral_power_iters) + eps
+                if rel_den_floor is not None:
+                    spectral_den = max(spectral_den, rel_den_floor)
                 rel_spectral_np[e] = float(
                     _spectral_norm_estimate(w_hat_e - w_e, eps, spectral_power_iters)
-                    / (_spectral_norm_estimate(w_e, eps, spectral_power_iters) + eps)
+                    / spectral_den
                 )
                 gram_cos_drift_sampled_rms_np[e] = float(
                     _gram_cos_drift_sampled_rms(
