@@ -49,6 +49,16 @@ class MetadataInitRunTests(unittest.TestCase):
             self.assertEqual(scan_cfg.get("use_safetensors_index_json"), True)
             self.assertEqual(scan_cfg.get("strict_index"), False)
 
+    def test_init_run_writes_quant_compute_dtype_default(self):
+        init_run = _load_init_run(self.repo_root)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            run_dir = init_run.init_run(tmp_path, "model", "run", None)
+            cfg = json.loads((run_dir / "analysis_config.json").read_text())
+
+            stats_cfg = cfg.get("stats", {})
+            self.assertEqual(stats_cfg.get("quant_compute_dtype"), "bf16")
+
 
 class CollectDataMetadataTests(unittest.TestCase):
     def setUp(self):

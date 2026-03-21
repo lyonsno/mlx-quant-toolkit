@@ -175,11 +175,14 @@ class CollectDataHelperModuleSplitContractTests(unittest.TestCase):
         class StubMx:
             cpu = object()
             gpu = object()
+            bfloat16 = "bfloat16"
+            float16 = "float16"
+            float32 = "float32"
 
             def set_default_device(self, _device):
                 return None
 
-            def array(self, x):
+            def array(self, x, dtype=None):
                 return x
 
             def quantize(self, *_args, **_kwargs):

@@ -3,11 +3,13 @@ from __future__ import annotations
 import warnings
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import ml_dtypes
 import numpy as np
 import pandas as pd
 
 mx = None
 
+_DEFAULT_QUANT_COMPUTE_DTYPE = "fp16"
 _DEFAULT_QUANT_SPECTRAL_POWER_ITERS = 12
 _DEFAULT_QUANT_GRAM_SAMPLE_K = 128
 
@@ -32,6 +34,23 @@ def _get_positive_int_config(cfg: Dict[str, Any], key: str, default: int) -> int
     if value <= 0:
         raise ValueError(f"{key} must be a positive integer")
     return value
+
+
+def _resolve_quant_compute_dtype(cfg: Dict[str, Any]) -> tuple[Any, str]:
+    # Backward-compat bridge: legacy configs without this key keep the old
+    # implicit fp16 behavior, while fresh init_run templates write explicit bf16.
+    raw_value = cfg.get("quant_compute_dtype", _DEFAULT_QUANT_COMPUTE_DTYPE)
+    if not isinstance(raw_value, str):
+        raise ValueError("quant_compute_dtype must be one of: bf16, fp16, fp32")
+
+    value = raw_value.strip().lower()
+    if value in {"bf16", "bfloat16"}:
+        return ml_dtypes.bfloat16, "bfloat16"
+    if value in {"fp16", "float16"}:
+        return np.float16, "float16"
+    if value in {"fp32", "float32"}:
+        return np.float32, "float32"
+    raise ValueError("quant_compute_dtype must be one of: bf16, fp16, fp32")
 
 
 QUANT_SIM_COLUMNS = [
@@ -167,6 +186,7 @@ def _mlx_quant_sim(
         "quant_gram_sample_k",
         _DEFAULT_QUANT_GRAM_SAMPLE_K,
     )
+    quant_compute_dtype, quant_compute_dtype_name = _resolve_quant_compute_dtype(cfg_stats)
     sample_seed = int(cfg_stats.get("sample_seed", 1337))
     warns: List[str] = []
 
@@ -188,9 +208,12 @@ def _mlx_quant_sim(
         except Exception:
             pass
 
-    # Use float16 to reduce memory; errors are relative so OK for ranking.
-    w = bank.astype(np.float16, copy=False)
-    w_mx = mx_mod.array(w)
+    # Keep a NumPy view in the chosen compute dtype for downstream metric math, but
+    # construct the MLX array from float32 input plus an MLX dtype token. Real MLX
+    # rejects NumPy bf16 ndarrays in mx.array(...).
+    w = bank.astype(quant_compute_dtype, copy=False)
+    mlx_quant_compute_dtype = getattr(mx_mod, quant_compute_dtype_name, quant_compute_dtype)
+    w_mx = mx_mod.array(bank.astype(np.float32, copy=False), dtype=mlx_quant_compute_dtype)
 
     rows = []
     for s in schemes:
@@ -216,7 +239,7 @@ def _mlx_quant_sim(
                 group_size=group_size,
                 bits=bits,
                 mode=mode,
-                dtype=w_mx.dtype,
+                dtype=mlx_quant_compute_dtype,
             )
 
             diff = w_hat - w_mx
@@ -255,9 +278,10 @@ def _mlx_quant_sim(
             rel_max_np = np.array(rel_max).astype(np.float32)
             scales_mean_np = np.array(scales_mean).astype(np.float32)
             scales_max_np = np.array(scales_max).astype(np.float32)
+            e_count = rel_fro_np.shape[0]
             rel_spectral_np = np.zeros((rel_fro_np.shape[0],), dtype=np.float32)
             gram_cos_drift_sampled_rms_np = np.zeros((rel_fro_np.shape[0],), dtype=np.float32)
-            for e in range(rel_fro_np.shape[0]):
+            for e in range(e_count):
                 w_e = w[e].astype(np.float32, copy=False)
                 w_hat_e = np.array(w_hat[e]).astype(np.float32)
                 rel_spectral_np[e] = float(
@@ -281,7 +305,6 @@ def _mlx_quant_sim(
                 biases_mean_np = None
                 biases_max_np = None
 
-            e_count = rel_fro_np.shape[0]
             for e in range(e_count):
                 rows.append(
                     {

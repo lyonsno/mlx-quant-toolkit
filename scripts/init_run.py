@@ -85,6 +85,7 @@ DEFAULT_CONFIG = {
     "eps": 1e-12,
     "sample_per_matrix": 8192,
     "sample_seed": 1337,
+    "quant_compute_dtype": "bf16",
     "percentiles_abs": [50.0, 99.0, 99.9],
     "group_outlier_percentile": 95.0,
     "group_sizes_lastdim": [32, 64]
