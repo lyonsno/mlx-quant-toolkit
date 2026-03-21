@@ -335,7 +335,7 @@ class CollectDataHelperModuleSplitContractTests(unittest.TestCase):
             try:
                 with self.assertRaisesRegex(
                     ValueError,
-                    r"quant_sim produced zero rows despite enabled quantization",
+                    r"layers\.0\.experts\.0\.down_proj\.weight.*expected 1 quant rows.*got 0",
                 ):
                     collect_data._main_impl(
                         Namespace(run_dir=str(run_dir), model_path=None),
