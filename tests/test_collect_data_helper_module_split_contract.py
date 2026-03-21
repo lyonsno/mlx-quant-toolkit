@@ -661,6 +661,83 @@ class CollectDataHelperModuleSplitContractTests(unittest.TestCase):
                 collect_data._iter_weight_files = original_iter_weight_files
                 collect_data._load_mlx = original_load_mlx
 
+    def test_collect_data_index_discovery_exceptions_refresh_failure_context_before_artifact_write(self):
+        collect_data = _load_module("collect_data", self.scripts_dir / "collect_data.py")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            self._write_npz_with_key(
+                model_dir / "weights.npz",
+                "layers.0.experts.0.down_proj.weight",
+                np.arange(16, dtype=np.float32).reshape(1, 4, 4),
+            )
+
+            run_root = tmp_path / "runs"
+            run_root.mkdir(parents=True, exist_ok=True)
+            init_run = _load_module("init_run", self.scripts_dir / "init_run.py")
+            init_run.init_run(run_root, "model", "run", str(model_dir))
+
+            run_dir = run_root / "model" / "run"
+            cfg_path = run_dir / "analysis_config.json"
+            cfg = json.loads(cfg_path.read_text())
+            cfg["output"]["format"] = "csv"
+            cfg["output"]["compression"] = None
+            cfg["scan"]["use_safetensors_index_json"] = True
+            cfg["scan"]["strict_index"] = False
+            cfg["metadata"]["enabled"] = False
+            cfg_path.write_text(json.dumps(cfg, indent=2))
+
+            class BrokenIndexModule:
+                @staticmethod
+                def find_safetensors_index_json(_model_path):
+                    raise RuntimeError("index lookup blew up")
+
+                @staticmethod
+                def parse_safetensors_index(_index_path):
+                    raise AssertionError("parse_safetensors_index should not be reached")
+
+            original_get_metadata_module = collect_data._get_metadata_module
+            collect_data._get_metadata_module = lambda: BrokenIndexModule
+            failure_ctx = {
+                "run_dir": run_dir,
+                "manifest": {},
+                "configured_model_path": None,
+                "model_path": None,
+                "cli_overrides": {},
+                "index_status": "not_initialized",
+                "index_searched": False,
+                "index_found": False,
+                "index_active": False,
+                "index_path": None,
+                "index_path_found": None,
+                "index_error": None,
+            }
+            try:
+                try:
+                    collect_data._main_impl(
+                        Namespace(run_dir=str(run_dir), model_path=None),
+                        failure_ctx,
+                    )
+                except RuntimeError as exc:
+                    self.assertRegex(str(exc), r"index lookup blew up")
+                    collect_data._write_run_failure_artifact(exc, failure_ctx)
+                else:
+                    self.fail("Expected RuntimeError from broken index discovery helper")
+            finally:
+                collect_data._get_metadata_module = original_get_metadata_module
+
+            failure_path = run_dir / "logs" / "run_failure.json"
+            self.assertTrue(failure_path.exists())
+            payload = json.loads(failure_path.read_text())
+            index_info = payload.get("index", {})
+            self.assertEqual(index_info.get("status"), "not_found")
+            self.assertEqual(index_info.get("searched"), True)
+            self.assertEqual(index_info.get("found"), False)
+            self.assertEqual(index_info.get("active"), False)
+            self.assertIsNone(index_info.get("index_path"))
+
 
 if __name__ == "__main__":
     unittest.main()

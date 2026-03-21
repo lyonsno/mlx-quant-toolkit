@@ -597,26 +597,36 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
     index_found = False
     index_status = "disabled"
     index_error = None
-    failure_ctx.update(
-        {
-            "index_status": index_status,
-            "index_searched": bool(index_searched),
-            "index_found": bool(index_found),
-            "index_active": bool(index_active),
-            "index_path": index_path,
-            "index_path_found": index_path_found,
-            "index_error": index_error,
-        }
-    )
+    
+    def _sync_index_failure_ctx() -> None:
+        current_index_parsed = bool(index_active and weight_map is not None)
+        current_index_used_for_scan = bool(current_index_parsed)
+        if model_path_is_file and current_index_parsed:
+            current_index_used_for_scan = False
+        failure_ctx.update(
+            {
+                "index_status": index_status,
+                "index_searched": bool(index_searched),
+                "index_found": bool(index_found),
+                "index_active": bool(current_index_used_for_scan),
+                "index_path": index_path,
+                "index_path_found": index_path_found,
+                "index_error": index_error,
+            }
+        )
+
+    _sync_index_failure_ctx()
 
     if use_index:
         index_searched = True
         index_status = "not_found"
+        _sync_index_failure_ctx()
         index_mod = _get_metadata_module()
         if index_mod is None:
             index_status = "unavailable"
             index_error = "metadata module unavailable"
             warn_log.append("[index] metadata module unavailable; skipping index")
+            _sync_index_failure_ctx()
         else:
             find_fn = getattr(index_mod, "find_safetensors_index_json", None)
             parse_fn = getattr(index_mod, "parse_safetensors_index", None)
@@ -624,11 +634,13 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
                 index_status = "unavailable"
                 index_error = "index helpers unavailable"
                 warn_log.append("[index] index helpers unavailable; skipping index")
+                _sync_index_failure_ctx()
             else:
                 index_path_found = find_fn(model_path)
                 index_path = index_path_found
                 if index_path is not None and index_path.exists():
                     index_found = True
+                    _sync_index_failure_ctx()
                     try:
                         weight_map, index_metadata = parse_fn(index_path)
                         weight_map = {k: _normalize_shard_id(v) for k, v in weight_map.items()}
@@ -638,9 +650,11 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
                         weight_map = None
                         index_status = "error"
                         index_error = f"{type(e).__name__}: {e}"
+                        _sync_index_failure_ctx()
                     else:
                         index_active = True
                         index_status = "active"
+                        _sync_index_failure_ctx()
                         for shard in weight_map.values():
                             if Path(shard).suffix in exts:
                                 expected_shards.add(shard)
@@ -659,17 +673,7 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
     if model_path_is_file and index_parsed:
         index_used_for_scan = False
         index_discovered_but_ignored_due_to_file_model_path = True
-    failure_ctx.update(
-        {
-            "index_status": index_status,
-            "index_searched": bool(index_searched),
-            "index_found": bool(index_found),
-            "index_active": bool(index_used_for_scan),
-            "index_path": index_path,
-            "index_path_found": index_path_found,
-            "index_error": index_error,
-        }
-    )
+    _sync_index_failure_ctx()
 
     duplicate_scheme_names = _find_duplicate_enabled_quant_scheme_names(schemes)
     duplicate_quant_preflight_done = False
@@ -698,7 +702,6 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
             "but model_path is a file; scanning only the anchor file. "
             "Pass the directory to scan the indexed shard set."
         )
-    failure_ctx["index_active"] = bool(index_used_for_scan)
 
     if mlx_enabled and schemes and not duplicate_quant_preflight_done:
         if _load_mlx() is None:
