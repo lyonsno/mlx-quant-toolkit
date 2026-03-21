@@ -405,6 +405,40 @@ class OptionalMlxPipelineTests(unittest.TestCase):
             self.assertIn("w_gram_cos_drift_sampled_rms", fieldnames)
             self.assertNotIn("w_gram_cos_drift_sampled_max", fieldnames)
 
+    def test_collect_data_without_mlx_allows_duplicate_quant_scheme_names_and_still_warns(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir, _, result = self._setup_and_collect(
+                Path(tmp_dir),
+                cfg_overrides={
+                    "mlx": {"enabled": True, "device": "cpu"},
+                    "quant_schemes": [
+                        {
+                            "name": "dup",
+                            "mode": "symmetric",
+                            "bits": 4,
+                            "group_size": 32,
+                            "enabled": True,
+                        },
+                        {
+                            "name": "dup",
+                            "mode": "symmetric",
+                            "bits": 8,
+                            "group_size": 64,
+                            "enabled": True,
+                        },
+                    ],
+                },
+            )
+
+            output = (result.stdout or "") + (result.stderr or "")
+            self.assertEqual(result.returncode, 0, f"collect_data failed unexpectedly:\n{output}")
+            self.assertIn("mlx is not importable", output)
+
+            matrix_path = run_dir / "data" / "matrix_stats.csv"
+            quant_path = run_dir / "data" / "quant_sim.csv"
+            self.assertTrue(matrix_path.exists())
+            self.assertTrue(quant_path.exists())
+
     def test_collect_data_with_stub_mlx_success_emits_renamed_quant_metric_schema(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             arr = np.arange(32, dtype=np.float32).reshape(2, 4, 4)

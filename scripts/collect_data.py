@@ -482,7 +482,6 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
     mlx_device = mlx_cfg.get("device", "cpu")
 
     schemes = [s for s in cfg.get("quant_schemes", []) if s.get("enabled", True)]
-    _validate_enabled_quant_scheme_names(schemes)
     cfg_stats = cfg["stats"]
     cache_idx_dir = run_dir / "cache" / "sampled_indices"
 
@@ -689,6 +688,8 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
             warnings.warn(msg)
             warn_log.append(f"[quant_sim] {msg}")
             mlx_enabled = False
+        else:
+            _validate_enabled_quant_scheme_names(schemes)
 
     files: List[Path] = []
     missing_shards: set[str] = set()

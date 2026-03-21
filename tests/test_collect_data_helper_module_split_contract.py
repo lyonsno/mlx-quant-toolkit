@@ -401,11 +401,9 @@ class CollectDataHelperModuleSplitContractTests(unittest.TestCase):
             ]
             cfg_path.write_text(json.dumps(cfg, indent=2))
 
-            original_load_mlx = collect_data._load_mlx
             original_iter_weight_files = collect_data._iter_weight_files
-            collect_data._load_mlx = lambda: (_ for _ in ()).throw(
-                AssertionError("_load_mlx should not be reached for duplicate quant scheme names")
-            )
+            original_load_mlx = collect_data._load_mlx
+            collect_data._load_mlx = lambda: object()
             collect_data._iter_weight_files = lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 AssertionError("_iter_weight_files should not be reached for duplicate quant scheme names")
             )
@@ -432,8 +430,78 @@ class CollectDataHelperModuleSplitContractTests(unittest.TestCase):
                         },
                     )
             finally:
-                collect_data._load_mlx = original_load_mlx
                 collect_data._iter_weight_files = original_iter_weight_files
+                collect_data._load_mlx = original_load_mlx
+
+    def test_collect_data_allows_duplicate_quant_scheme_names_when_mlx_is_disabled(self):
+        collect_data = _load_module("collect_data", self.scripts_dir / "collect_data.py")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            self._write_npz_with_key(
+                model_dir / "weights.npz",
+                "layers.0.experts.0.down_proj.weight",
+                np.arange(16, dtype=np.float32).reshape(1, 4, 4),
+            )
+
+            run_root = tmp_path / "runs"
+            run_root.mkdir(parents=True, exist_ok=True)
+            init_run = _load_module("init_run", self.scripts_dir / "init_run.py")
+            init_run.init_run(run_root, "model", "run", str(model_dir))
+
+            run_dir = run_root / "model" / "run"
+            cfg_path = run_dir / "analysis_config.json"
+            cfg = json.loads(cfg_path.read_text())
+            cfg["output"]["format"] = "csv"
+            cfg["output"]["compression"] = None
+            cfg["mlx"]["enabled"] = False
+            cfg["quant_schemes"] = [
+                {
+                    "name": "dup",
+                    "mode": "symmetric",
+                    "bits": 4,
+                    "group_size": 32,
+                    "enabled": True,
+                },
+                {
+                    "name": "dup",
+                    "mode": "symmetric",
+                    "bits": 8,
+                    "group_size": 64,
+                    "enabled": True,
+                },
+            ]
+            cfg_path.write_text(json.dumps(cfg, indent=2))
+
+            original_load_mlx = collect_data._load_mlx
+            collect_data._load_mlx = lambda: (_ for _ in ()).throw(
+                AssertionError("_load_mlx should not be reached when mlx.enabled=false")
+            )
+            try:
+                collect_data._main_impl(
+                    Namespace(run_dir=str(run_dir), model_path=None),
+                    {
+                        "run_dir": run_dir,
+                        "manifest": {},
+                        "configured_model_path": None,
+                        "model_path": None,
+                        "cli_overrides": {},
+                        "index_status": "not_initialized",
+                        "index_searched": False,
+                        "index_found": False,
+                        "index_active": False,
+                        "index_path": None,
+                        "index_path_found": None,
+                        "index_error": None,
+                    },
+                )
+            finally:
+                collect_data._load_mlx = original_load_mlx
+
+            self.assertTrue((run_dir / "data" / "matrix_stats.csv").exists())
+            self.assertTrue((run_dir / "data" / "quant_sim.csv").exists())
 
 
 if __name__ == "__main__":
