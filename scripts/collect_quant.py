@@ -24,6 +24,16 @@ def _load_mlx():
     return mx
 
 
+def _get_positive_int_config(cfg: Dict[str, Any], key: str, default: int) -> int:
+    raw_value = cfg.get(key, default)
+    if isinstance(raw_value, bool) or not isinstance(raw_value, (int, np.integer)):
+        raise ValueError(f"{key} must be an integer")
+    value = int(raw_value)
+    if value <= 0:
+        raise ValueError(f"{key} must be a positive integer")
+    return value
+
+
 QUANT_SIM_COLUMNS = [
     "scheme",
     "mode",
@@ -147,8 +157,16 @@ def _mlx_quant_sim(
     returns: quant_sim dataframe rows (per expert per scheme) AND list of warnings strings
     """
     eps = float(cfg_stats["eps"])
-    spectral_power_iters = int(cfg_stats.get("quant_spectral_power_iters", _DEFAULT_QUANT_SPECTRAL_POWER_ITERS))
-    gram_sample_k = int(cfg_stats.get("quant_gram_sample_k", _DEFAULT_QUANT_GRAM_SAMPLE_K))
+    spectral_power_iters = _get_positive_int_config(
+        cfg_stats,
+        "quant_spectral_power_iters",
+        _DEFAULT_QUANT_SPECTRAL_POWER_ITERS,
+    )
+    gram_sample_k = _get_positive_int_config(
+        cfg_stats,
+        "quant_gram_sample_k",
+        _DEFAULT_QUANT_GRAM_SAMPLE_K,
+    )
     sample_seed = int(cfg_stats.get("sample_seed", 1337))
     warns: List[str] = []
 

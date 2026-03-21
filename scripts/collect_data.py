@@ -72,6 +72,30 @@ def _path_for_scan_plan(path: Path, model_path: Path) -> str:
     return os.path.relpath(str(path), start=str(base))
 
 
+QUANT_SIM_ARTIFACT_COLUMNS = [
+    "file",
+    "source_tensor",
+    "derived_tensor",
+    "layer",
+    "block4",
+    "proj",
+    "expert_id",
+    "is_shared_expert",
+    "rows",
+    "cols",
+]
+
+
+def _validate_quant_sim_df_schema(qs_df: pd.DataFrame) -> None:
+    required_columns = QUANT_SIM_ARTIFACT_COLUMNS + [
+        col for col in QUANT_SIM_COLUMNS if col != "expert_id_in_bank"
+    ]
+    missing = [col for col in required_columns if col not in qs_df.columns]
+    if missing:
+        missing_text = ", ".join(missing)
+        raise ValueError(f"quant_sim is missing required public columns: {missing_text}")
+
+
 def _artifact_entry(meta: Dict[str, Any], run_dir: Path, rows: int) -> Dict[str, Any]:
     # Normalize the write metadata into a JSON-friendly manifest entry.
     entry = dict(meta)
@@ -881,22 +905,17 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
 
     inv_df = pd.DataFrame(inventory_rows)
     ms_df = pd.DataFrame(matrix_rows)
+    if mlx_enabled and schemes and len(matrix_rows) > 0 and len(quant_rows) == 0:
+        raise ValueError("quant_sim produced zero rows despite enabled quantization")
     if quant_rows:
         qs_df = pd.DataFrame(quant_rows)
+        _validate_quant_sim_df_schema(qs_df)
     else:
-        qs_df = pd.DataFrame(columns=[
-            "file",
-            "source_tensor",
-            "derived_tensor",
-            "layer",
-            "block4",
-            "proj",
-            "expert_id",
-            "is_shared_expert",
-            "rows",
-            "cols",
-            *QUANT_SIM_COLUMNS,
-        ])
+        qs_df = pd.DataFrame(
+            columns=QUANT_SIM_ARTIFACT_COLUMNS + [
+                col for col in QUANT_SIM_COLUMNS if col != "expert_id_in_bank"
+            ]
+        )
     um_df = pd.DataFrame(unmatched_rows) if unmatched_rows else pd.DataFrame()
     proj_df = pd.DataFrame(list(proj_issue_acc.values())) if proj_issue_acc else pd.DataFrame()
 

@@ -47,6 +47,13 @@ def _merge_quant_row_fields(dst: Dict[str, Any], qr: pd.Series) -> None:
         dst[key] = value
 
 
+def _validate_quant_helper_df(qdf: pd.DataFrame) -> None:
+    if qdf.empty:
+        return
+    if "expert_id_in_bank" not in qdf.columns:
+        raise ValueError("quant_sim helper output is missing required join column: expert_id_in_bank")
+
+
 def process_one_bank(
     *,
     bank_obj: Any,
@@ -109,6 +116,7 @@ def process_one_bank(
         qdf, warns = mlx_quant_sim(bank_erc, schemes, cfg_stats, mlx_device)
         if warn_log is not None:
             warn_log.extend(warns)
+        _validate_quant_helper_df(qdf)
 
         for _, qr in qdf.iterrows():
             e_in_bank = int(qr["expert_id_in_bank"])

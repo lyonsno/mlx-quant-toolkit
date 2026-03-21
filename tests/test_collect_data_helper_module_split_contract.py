@@ -1,8 +1,11 @@
 import importlib.util
 import json
+import io
 import sys
 import tempfile
 import unittest
+import zipfile
+from argparse import Namespace
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +31,12 @@ class CollectDataHelperModuleSplitContractTests(unittest.TestCase):
     def setUp(self):
         self.repo_root = Path(__file__).resolve().parents[1]
         self.scripts_dir = self.repo_root / "scripts"
+
+    def _write_npz_with_key(self, path: Path, key: str, arr: np.ndarray) -> None:
+        buf = io.BytesIO()
+        np.save(buf, arr)
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.writestr(f"{key}.npy", buf.getvalue())
 
     def test_helper_modules_exist_and_export_expected_api(self):
         expected_exports = {
@@ -189,6 +198,165 @@ class CollectDataHelperModuleSplitContractTests(unittest.TestCase):
         self.assertGreaterEqual(len(df), 2)
         for err in df["error"].tolist():
             self.assertIn("contract quantize fail", str(err))
+
+    def test_collect_data_fails_fast_when_quant_rows_would_write_reduced_public_schema(self):
+        collect_data = _load_module("collect_data", self.scripts_dir / "collect_data.py")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            self._write_npz_with_key(
+                model_dir / "weights.npz",
+                "layers.0.experts.0.down_proj.weight",
+                np.arange(16, dtype=np.float32).reshape(1, 4, 4),
+            )
+
+            run_root = tmp_path / "runs"
+            run_root.mkdir(parents=True, exist_ok=True)
+            init_run = _load_module("init_run", self.scripts_dir / "init_run.py")
+            init_run.init_run(run_root, "model", "run", str(model_dir))
+
+            run_dir = run_root / "model" / "run"
+            cfg_path = run_dir / "analysis_config.json"
+            cfg = json.loads(cfg_path.read_text())
+            cfg["output"]["format"] = "csv"
+            cfg["output"]["compression"] = None
+            cfg["mlx"]["enabled"] = True
+            cfg["mlx"]["device"] = "cpu"
+            cfg["quant_schemes"] = [
+                {
+                    "name": "s1",
+                    "mode": "symmetric",
+                    "bits": 4,
+                    "group_size": 32,
+                    "enabled": True,
+                }
+            ]
+            cfg_path.write_text(json.dumps(cfg, indent=2))
+
+            original_quant = collect_data._mlx_quant_sim
+            original_load_mlx = collect_data._load_mlx
+
+            def fake_quant(_bank, schemes, _cfg_stats, _device):
+                rows = []
+                for scheme in schemes:
+                    rows.append(
+                        {
+                            "scheme": scheme["name"],
+                            "mode": scheme["mode"],
+                            "bits": int(scheme.get("bits", 4)),
+                            "group_size": int(scheme.get("group_size", 32)),
+                            "expert_id_in_bank": 0,
+                            "w_rel_fro": 0.1,
+                            "w_rel_max": 0.2,
+                            "w_gram_cos_drift_sampled_rms": 0.06,
+                            "scale_mean": 1.1,
+                            "scale_max": 1.2,
+                            "bias_mean": None,
+                            "bias_max": None,
+                            "error": None,
+                        }
+                    )
+                return pd.DataFrame(rows), []
+
+            collect_data._mlx_quant_sim = fake_quant
+            collect_data._load_mlx = lambda: object()
+            try:
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"quant_sim is missing required public columns: .*w_rel_spectral",
+                ):
+                    collect_data._main_impl(
+                        Namespace(run_dir=str(run_dir), model_path=None),
+                        {
+                            "run_dir": run_dir,
+                            "manifest": {},
+                            "configured_model_path": None,
+                            "model_path": None,
+                            "cli_overrides": {},
+                            "index_status": "not_initialized",
+                            "index_searched": False,
+                            "index_found": False,
+                            "index_active": False,
+                            "index_path": None,
+                            "index_path_found": None,
+                            "index_error": None,
+                        },
+                    )
+            finally:
+                collect_data._mlx_quant_sim = original_quant
+                collect_data._load_mlx = original_load_mlx
+
+    def test_collect_data_rejects_silent_zero_row_quant_output_when_quantization_was_expected(self):
+        collect_data = _load_module("collect_data", self.scripts_dir / "collect_data.py")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            self._write_npz_with_key(
+                model_dir / "weights.npz",
+                "layers.0.experts.0.down_proj.weight",
+                np.arange(16, dtype=np.float32).reshape(1, 4, 4),
+            )
+
+            run_root = tmp_path / "runs"
+            run_root.mkdir(parents=True, exist_ok=True)
+            init_run = _load_module("init_run", self.scripts_dir / "init_run.py")
+            init_run.init_run(run_root, "model", "run", str(model_dir))
+
+            run_dir = run_root / "model" / "run"
+            cfg_path = run_dir / "analysis_config.json"
+            cfg = json.loads(cfg_path.read_text())
+            cfg["output"]["format"] = "csv"
+            cfg["output"]["compression"] = None
+            cfg["mlx"]["enabled"] = True
+            cfg["mlx"]["device"] = "cpu"
+            cfg["quant_schemes"] = [
+                {
+                    "name": "s1",
+                    "mode": "symmetric",
+                    "bits": 4,
+                    "group_size": 32,
+                    "enabled": True,
+                }
+            ]
+            cfg_path.write_text(json.dumps(cfg, indent=2))
+
+            original_quant = collect_data._mlx_quant_sim
+            original_load_mlx = collect_data._load_mlx
+
+            def fake_quant(_bank, _schemes, _cfg_stats, _device):
+                return pd.DataFrame(columns=collect_data.QUANT_SIM_COLUMNS), []
+
+            collect_data._mlx_quant_sim = fake_quant
+            collect_data._load_mlx = lambda: object()
+            try:
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"quant_sim produced zero rows despite enabled quantization",
+                ):
+                    collect_data._main_impl(
+                        Namespace(run_dir=str(run_dir), model_path=None),
+                        {
+                            "run_dir": run_dir,
+                            "manifest": {},
+                            "configured_model_path": None,
+                            "model_path": None,
+                            "cli_overrides": {},
+                            "index_status": "not_initialized",
+                            "index_searched": False,
+                            "index_found": False,
+                            "index_active": False,
+                            "index_path": None,
+                            "index_path_found": None,
+                            "index_error": None,
+                        },
+                    )
+            finally:
+                collect_data._mlx_quant_sim = original_quant
+                collect_data._load_mlx = original_load_mlx
 
 
 if __name__ == "__main__":

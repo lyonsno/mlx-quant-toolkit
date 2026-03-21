@@ -340,6 +340,67 @@ class CollectPipelineSplitContractTests(unittest.TestCase):
         self.assertEqual(second["error"], "stub error")
         self.assertNotIn("helper_debug_note", second)
 
+    def test_process_one_bank_quant_rows_fail_fast_when_expert_id_in_bank_is_missing(self):
+        mod = _load_module("collect_pipeline", self.scripts_dir / "collect_pipeline.py")
+
+        bank_obj = SimpleNamespace(
+            source_file="f.npz",
+            source_tensor="layers.5.experts.0.w2.weight",
+            derived_tensor="layers.5.experts.0.w2.weight::down_proj",
+            proj="down_proj",
+            is_shared_expert=False,
+            layer_base=5,
+            expert_single_id=None,
+        )
+        bank_erc = np.array([[[1.0, 2.0], [3.0, 4.0]]], dtype=np.float32)
+
+        def fake_stats(bank, _cfg_stats, _cache_dir):
+            e_count = bank.shape[0]
+            return {"mean": np.arange(e_count, dtype=np.float32)}
+
+        def fake_quant(_bank, _schemes, _cfg_stats, _device):
+            qdf = pd.DataFrame(
+                [
+                    {
+                        "scheme": "q4",
+                        "mode": "symmetric",
+                        "bits": 4,
+                        "group_size": 32,
+                        "w_rel_fro": 0.1,
+                        "w_rel_max": 0.2,
+                        "w_rel_spectral": 0.05,
+                        "w_gram_cos_drift_sampled_rms": 0.06,
+                        "scale_mean": 1.1,
+                        "scale_max": 1.2,
+                        "bias_mean": None,
+                        "bias_max": None,
+                        "error": None,
+                    }
+                ]
+            )
+            return qdf, []
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with self.assertRaisesRegex(
+                ValueError,
+                r"expert_id_in_bank",
+            ):
+                mod.process_one_bank(
+                    bank_obj=bank_obj,
+                    bank_erc=bank_erc,
+                    layer_idx=5,
+                    cfg_stats={"eps": 1e-12},
+                    cache_idx_dir=Path(tmp_dir),
+                    matrix_rows=[],
+                    quant_rows=[],
+                    mlx_enabled=True,
+                    schemes=[{"name": "q4", "enabled": True}],
+                    mlx_device="cpu",
+                    per_expert_weight_stats=fake_stats,
+                    mlx_quant_sim=fake_quant,
+                    warn_log=[],
+                )
+
     def test_process_one_bank_quant_rows_use_minus_one_for_shared_expert(self):
         mod = _load_module("collect_pipeline", self.scripts_dir / "collect_pipeline.py")
 
