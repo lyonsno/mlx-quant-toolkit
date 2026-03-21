@@ -87,6 +87,13 @@ QUANT_SIM_ARTIFACT_COLUMNS = [
 
 
 def _validate_enabled_quant_scheme_names(schemes: List[Dict[str, Any]]) -> None:
+    duplicates = _find_duplicate_enabled_quant_scheme_names(schemes)
+    if duplicates:
+        dup_text = ", ".join(sorted(duplicates))
+        raise ValueError(f"duplicate enabled quant_schemes names: {dup_text}")
+
+
+def _find_duplicate_enabled_quant_scheme_names(schemes: List[Dict[str, Any]]) -> Set[str]:
     seen: Set[str] = set()
     duplicates: Set[str] = set()
     for scheme in schemes:
@@ -95,9 +102,7 @@ def _validate_enabled_quant_scheme_names(schemes: List[Dict[str, Any]]) -> None:
             duplicates.add(name)
             continue
         seen.add(name)
-    if duplicates:
-        dup_text = ", ".join(sorted(duplicates))
-        raise ValueError(f"duplicate enabled quant_schemes names: {dup_text}")
+    return duplicates
 
 
 def _validate_quant_sim_df_schema(qs_df: pd.DataFrame) -> None:
@@ -463,10 +468,6 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
     model_path_is_file = bool(model_path.is_file())
     model_path_kind = "file" if model_path_is_file else "dir"
 
-    # Fail fast when strict_index is enabled but index discovery is disabled.
-    if strict_index and not use_index:
-        raise SystemExit("strict_index requires use_safetensors_index_json=true")
-
     parsing = cfg["parsing"]
     layer_re = re.compile(parsing["layer_regex"])
     expert_re = re.compile(parsing["expert_regex"])
@@ -584,15 +585,6 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
                     else:
                         warn_log.append(f"[meta] no recognized fields in {cfg_path}")
 
-    if mlx_enabled and schemes:
-        if _load_mlx() is None:
-            msg = "mlx is not importable; skipping quantization simulations"
-            warnings.warn(msg)
-            warn_log.append(f"[quant_sim] {msg}")
-            mlx_enabled = False
-        else:
-            _validate_enabled_quant_scheme_names(schemes)
-
     index_path = None
     index_path_found = None
     weight_map = None
@@ -674,6 +666,22 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
         }
     )
 
+    duplicate_scheme_names = _find_duplicate_enabled_quant_scheme_names(schemes)
+    duplicate_quant_preflight_done = False
+    if duplicate_scheme_names and mlx_enabled and schemes:
+        duplicate_quant_preflight_done = True
+        if _load_mlx() is None:
+            msg = "mlx is not importable; skipping quantization simulations"
+            warnings.warn(msg)
+            warn_log.append(f"[quant_sim] {msg}")
+            mlx_enabled = False
+        else:
+            _validate_enabled_quant_scheme_names(schemes)
+
+    # Fail fast when strict_index is enabled but index discovery is disabled.
+    if strict_index and not use_index:
+        raise SystemExit("strict_index requires use_safetensors_index_json=true")
+
     # Make "strict" mean "an active index must exist" when index discovery is enabled.
     if strict_index and use_index and not index_parsed:
         raise SystemExit(f"strict_index requires an active index (status: {index_status})")
@@ -690,6 +698,13 @@ def _main_impl(args: argparse.Namespace, failure_ctx: Dict[str, Any]) -> None:
             "Pass the directory to scan the indexed shard set."
         )
     failure_ctx["index_active"] = bool(index_used_for_scan)
+
+    if mlx_enabled and schemes and not duplicate_quant_preflight_done:
+        if _load_mlx() is None:
+            msg = "mlx is not importable; skipping quantization simulations"
+            warnings.warn(msg)
+            warn_log.append(f"[quant_sim] {msg}")
+            mlx_enabled = False
 
     files: List[Path] = []
     missing_shards: set[str] = set()

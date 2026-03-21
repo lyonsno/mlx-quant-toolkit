@@ -74,6 +74,20 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
         env["PYTHONWARNINGS"] = "default"
         return env
 
+    def _create_stub_mlx_success(self, root: Path) -> Path:
+        stub_root = root / "stub_mlx_success"
+        pkg_dir = stub_root / "mlx"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+        (pkg_dir / "__init__.py").write_text("")
+        (pkg_dir / "core.py").write_text(
+            "def set_default_device(_device):\n"
+            "    return None\n"
+            "\n"
+            "cpu = object()\n"
+            "gpu = object()\n"
+        )
+        return stub_root
+
     def _run_collect(self, run_dir: Path, model_path: Path | None, env: dict, check: bool):
         cmd = [
             sys.executable,
@@ -622,6 +636,74 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
                 Path(model_path_info.get("resolved")).resolve(),
                 model_dir.resolve(),
             )
+
+    def test_collect_data_duplicate_quant_scheme_failure_writes_run_failure_with_disabled_index_context(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            np.savez(
+                model_dir / "shard1.npz",
+                **{"layers.0.experts.0.up_proj.weight": np.arange(4, dtype=np.float32).reshape(2, 2)},
+            )
+
+            run_dir = self._init_run_dir(tmp_path, "duplicate-quant-schemes-hard-fail")
+            self._write_config(
+                run_dir,
+                model_dir,
+                use_index=False,
+                output_format="csv",
+                compression=None,
+            )
+            cfg_path = run_dir / "analysis_config.json"
+            cfg = json.loads(cfg_path.read_text())
+            cfg["mlx"] = {"enabled": True, "device": "cpu"}
+            cfg["quant_schemes"] = [
+                {
+                    "name": "dup",
+                    "mode": "symmetric",
+                    "bits": 4,
+                    "group_size": 32,
+                    "enabled": True,
+                },
+                {
+                    "name": "dup",
+                    "mode": "symmetric",
+                    "bits": 8,
+                    "group_size": 64,
+                    "enabled": True,
+                },
+            ]
+            cfg_path.write_text(json.dumps(cfg, indent=2))
+
+            stub_root = self._create_stub_mlx_success(tmp_path)
+            env = self._env()
+            env["PYTHONPATH"] = str(stub_root) + os.pathsep + env.get("PYTHONPATH", "")
+
+            result = self._run_collect(run_dir, None, env, check=False)
+            self.assertNotEqual(result.returncode, 0)
+
+            failure_path = run_dir / "logs" / "run_failure.json"
+            self.assertTrue(failure_path.exists())
+
+            payload = json.loads(failure_path.read_text())
+            self._assert_run_failure_payload_basics(payload, run_dir)
+
+            error_info = payload.get("error", {})
+            self.assertEqual(error_info.get("type"), "ValueError")
+            self.assertIn("duplicate enabled quant_schemes names", str(error_info.get("message")))
+
+            index_info = payload.get("index", {})
+            self._assert_required_keys_subset(
+                index_info,
+                {"status", "searched", "found", "active", "index_path"},
+                "run_failure.index",
+            )
+            self.assertEqual(index_info.get("status"), "disabled")
+            self.assertEqual(index_info.get("searched"), False)
+            self.assertEqual(index_info.get("found"), False)
+            self.assertEqual(index_info.get("active"), False)
+            self.assertIsNone(index_info.get("index_path"))
 
     def test_collect_data_hard_fail_bad_npz_writes_exception_traceback_in_run_failure(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
