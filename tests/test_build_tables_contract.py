@@ -1524,6 +1524,237 @@ class BuildTablesContractTests(unittest.TestCase):
                 "Input-read failures should leave the previous tables manifest unchanged",
             )
 
+    def test_build_tables_duplicate_delta_cleanup_preserves_unrelated_table_sidecars(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                output_format="csv",
+                compression=None,
+                delta_pairs=[
+                    {"name": "delta_ab", "a": "scheme_a", "b": "scheme_b"},
+                ],
+            )
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+            self._write_quant_sim_csv(data_dir, self._sample_quant_rows())
+
+            self._run_build_tables(run_dir)
+
+            custom_sidecar = run_dir / "tables" / "custom" / "manual_notes.csv"
+            custom_sidecar.parent.mkdir(parents=True, exist_ok=True)
+            custom_sidecar.write_text("note,value\ncustom,1\n")
+
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.15,
+                        "w_rel_max": 0.2,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        # CONTRACT: duplicate-delta cleanup should remove only
+                        # build_tables-owned outputs, not unrelated sidecars in
+                        # tables/ created by other tooling or manual workflows.
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.31,
+                        "w_rel_max": 0.44,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_b",
+                        "w_rel_fro": 0.09,
+                        "w_rel_max": 0.12,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                ],
+            )
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("duplicate", output.lower())
+            self.assertFalse(
+                (run_dir / "tables" / "B_quant_deltas.csv").exists(),
+                "Duplicate-delta cleanup should still clear stale canonical outputs",
+            )
+            self.assertFalse(
+                (run_dir / "logs" / "tables_write_manifest.json").exists(),
+                "Duplicate-delta cleanup should still clear the stale tables manifest",
+            )
+            self.assertTrue(
+                custom_sidecar.exists(),
+                "Duplicate-delta cleanup should preserve unrelated table sidecars",
+            )
+            self.assertEqual(
+                custom_sidecar.read_text(),
+                "note,value\ncustom,1\n",
+                "Duplicate-delta cleanup should not rewrite unrelated table sidecars",
+            )
+
+    def test_build_tables_duplicate_delta_cleanup_ignores_poisoned_manifest_path_for_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                output_format="csv",
+                compression=None,
+                delta_pairs=[
+                    {"name": "delta_ab", "a": "scheme_a", "b": "scheme_b"},
+                ],
+            )
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+            self._write_quant_sim_csv(data_dir, self._sample_quant_rows())
+
+            self._run_build_tables(run_dir)
+
+            custom_sidecar = run_dir / "tables" / "custom" / "manual_notes.csv"
+            custom_sidecar.parent.mkdir(parents=True, exist_ok=True)
+            custom_sidecar.write_text("note,value\ncustom,1\n")
+
+            manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["artifacts"]["B_quant_deltas"]["path"] = "tables/custom/manual_notes.csv"
+            manifest_path.write_text(json.dumps(manifest, indent=2))
+
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.15,
+                        "w_rel_max": 0.2,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        # CONTRACT: stale/corrupt tables manifests must not be
+                        # able to redirect duplicate-delta cleanup onto unrelated
+                        # sidecars under tables/.
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.31,
+                        "w_rel_max": 0.44,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_b",
+                        "w_rel_fro": 0.09,
+                        "w_rel_max": 0.12,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                ],
+            )
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("duplicate", output.lower())
+            self.assertFalse(
+                (run_dir / "tables" / "B_quant_deltas.csv").exists(),
+                "Duplicate-delta cleanup should still clear stale canonical outputs",
+            )
+            self.assertFalse(
+                manifest_path.exists(),
+                "Duplicate-delta cleanup should still clear the stale tables manifest",
+            )
+            self.assertTrue(
+                custom_sidecar.exists(),
+                "Poisoned manifest paths should not let duplicate-delta cleanup delete unrelated sidecars",
+            )
+            self.assertEqual(
+                custom_sidecar.read_text(),
+                "note,value\ncustom,1\n",
+                "Poisoned manifest paths should not rewrite unrelated sidecars",
+            )
+
     def test_build_tables_quant_error_rows_are_represented_in_b_summaries(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir) / "run"

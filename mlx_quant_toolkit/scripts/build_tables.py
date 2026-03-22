@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import importlib.util
 import json
 from pathlib import Path
-import shutil
+import sys
 from typing import Any, Dict, List
 
 import pandas as pd
@@ -90,6 +91,7 @@ QUANT_METRIC_COLUMNS = [
 ]
 
 _TABLE_INPUT_SUFFIXES = {".csv", ".parquet"}
+_TABLE_ARTIFACTS_MODULE = None
 
 
 def _safe_read_json_dict(path: Path) -> Dict[str, Any]:
@@ -104,6 +106,52 @@ def _safe_read_json_dict(path: Path) -> Dict[str, Any]:
     except Exception:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _local_helper_module_key(module_name: str) -> str:
+    return f"{__name__}.__local__.{module_name}"
+
+
+def _load_local_helper_module(module_name: str):
+    module_path = Path(__file__).resolve().parent / f"{module_name}.py"
+    local_module_key = _local_helper_module_key(module_name)
+    for key in (local_module_key, module_name):
+        existing = sys.modules.get(key)
+        if existing is None:
+            continue
+        existing_file = getattr(existing, "__file__", None)
+        if existing_file is not None:
+            try:
+                if Path(existing_file).resolve() == module_path:
+                    return existing
+            except Exception:
+                pass
+
+    spec = importlib.util.spec_from_file_location(local_module_key, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load helper module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    had_prior_entry = local_module_key in sys.modules
+    prior_entry = sys.modules.get(local_module_key)
+    sys.modules[local_module_key] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        current = sys.modules.get(local_module_key)
+        if current is module:
+            if had_prior_entry:
+                sys.modules[local_module_key] = prior_entry
+            else:
+                sys.modules.pop(local_module_key, None)
+        raise
+    return module
+
+
+def _get_table_artifacts_module():
+    global _TABLE_ARTIFACTS_MODULE
+    if _TABLE_ARTIFACTS_MODULE is None:
+        _TABLE_ARTIFACTS_MODULE = _load_local_helper_module("table_artifacts")
+    return _TABLE_ARTIFACTS_MODULE
 
 
 def _read_df(path: Path, empty_columns: List[str] | None = None) -> pd.DataFrame:
@@ -233,10 +281,69 @@ def _write_df(df: pd.DataFrame, path: Path, fmt: str, compression: str | None) -
     }
 
 
+def _resolve_previous_table_output_path(run_dir: Path, artifact_key: str, raw_path: Any) -> Path | None:
+    if raw_path is None:
+        return None
+    path_text = str(raw_path).strip()
+    if not path_text:
+        return None
+    path_text = path_text.replace("\\", "/")
+    candidate = Path(path_text)
+    candidate_abs = candidate if candidate.is_absolute() else (run_dir / candidate)
+    try:
+        rel = candidate_abs.resolve().relative_to(run_dir.resolve()).as_posix()
+    except Exception:
+        return None
+    rel_path = Path(rel)
+    if rel_path.parent.as_posix() != "tables":
+        return None
+    if candidate_abs.suffix.lower() not in _TABLE_INPUT_SUFFIXES:
+        return None
+    if rel_path.name not in {f"{artifact_key}.csv", f"{artifact_key}.parquet"}:
+        return None
+    return candidate_abs
+
+
+def _prune_empty_table_dirs(path: Path, *, tables_dir: Path) -> None:
+    current = path
+    while True:
+        if current == tables_dir.parent:
+            return
+        if not current.exists():
+            current = current.parent
+            continue
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        if current == tables_dir:
+            return
+        current = current.parent
+
+
 def _clear_previous_table_outputs(run_dir: Path) -> None:
+    candidate_paths = set()
+    artifact_keys = list(_get_table_artifacts_module().DEFAULT_TABLE_ARTIFACT_KEYS)
+    manifest = _safe_read_json_dict(run_dir / "logs" / "tables_write_manifest.json")
+    manifest_artifacts = manifest.get("artifacts", {})
+    if isinstance(manifest_artifacts, dict):
+        for artifact_key in artifact_keys:
+            entry = manifest_artifacts.get(artifact_key)
+            if isinstance(entry, dict):
+                resolved = _resolve_previous_table_output_path(run_dir, artifact_key, entry.get("path"))
+                if resolved is not None:
+                    candidate_paths.add(resolved)
+
+    for artifact_key in artifact_keys:
+        candidate_paths.add(run_dir / "tables" / f"{artifact_key}.parquet")
+        candidate_paths.add(run_dir / "tables" / f"{artifact_key}.csv")
+
     tables_dir = run_dir / "tables"
-    if tables_dir.exists():
-        shutil.rmtree(tables_dir)
+    for path in sorted(candidate_paths):
+        if path.exists():
+            path.unlink()
+            _prune_empty_table_dirs(path.parent, tables_dir=tables_dir)
+
     manifest_path = run_dir / "logs" / "tables_write_manifest.json"
     if manifest_path.exists():
         manifest_path.unlink()
