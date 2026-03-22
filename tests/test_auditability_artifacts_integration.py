@@ -579,6 +579,39 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             index_path = index_info.get("index_path")
             self.assertTrue(index_path is None or isinstance(index_path, str))
 
+    def test_collect_data_hard_fail_invalid_config_json_writes_run_failure_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            run_dir = self._init_run_dir(tmp_path, "invalid-config-json-hard-fail")
+            (run_dir / "analysis_config.json").write_text("{")
+
+            result = self._run_collect(run_dir, None, self._env(), check=False)
+            self.assertNotEqual(result.returncode, 0)
+
+            failure_path = run_dir / "logs" / "run_failure.json"
+            self.assertTrue(failure_path.exists())
+            self.assertFalse((run_dir / "logs" / "run_context.json").exists())
+
+            payload = json.loads(failure_path.read_text())
+            self._assert_run_failure_payload_basics(payload, run_dir)
+
+            error_info = payload.get("error", {})
+            self.assertEqual(error_info.get("type"), "JSONDecodeError")
+
+            traceback_text = payload.get("traceback")
+            self.assertIsInstance(traceback_text, str)
+            self.assertIn("JSONDecodeError", traceback_text)
+
+            model_path_info = payload.get("model_path", {})
+            self._assert_required_keys_subset(
+                model_path_info,
+                {"configured", "resolved", "source"},
+                "run_failure.model_path",
+            )
+            self.assertIsNone(model_path_info.get("configured"))
+            self.assertIsNone(model_path_info.get("resolved"))
+            self.assertIsNone(model_path_info.get("source"))
+
     def test_collect_data_hard_fail_strict_index_writes_run_failure_with_index_context(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -631,6 +664,64 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
                 {"configured", "resolved", "source"},
                 "run_failure.model_path",
             )
+            self.assertEqual(model_path_info.get("source"), "config")
+            self.assertEqual(
+                Path(model_path_info.get("configured")).resolve(),
+                model_dir.resolve(),
+            )
+            self.assertEqual(
+                Path(model_path_info.get("resolved")).resolve(),
+                model_dir.resolve(),
+            )
+
+    def test_collect_data_hard_fail_invalid_regex_writes_run_failure_with_model_path_context(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            np.savez(
+                model_dir / "shard1.npz",
+                **{"layers.0.experts.0.up_proj.weight": np.arange(4, dtype=np.float32).reshape(2, 2)},
+            )
+
+            run_dir = self._init_run_dir(tmp_path, "invalid-regex-hard-fail")
+            self._write_config(
+                run_dir,
+                model_dir,
+                use_index=False,
+                output_format="csv",
+                compression=None,
+            )
+            cfg_path = run_dir / "analysis_config.json"
+            cfg = json.loads(cfg_path.read_text())
+            cfg["parsing"]["layer_regex"] = "("
+            cfg_path.write_text(json.dumps(cfg, indent=2))
+
+            result = self._run_collect(run_dir, None, self._env(), check=False)
+            self.assertNotEqual(result.returncode, 0)
+
+            failure_path = run_dir / "logs" / "run_failure.json"
+            self.assertTrue(failure_path.exists())
+            self.assertFalse((run_dir / "logs" / "run_context.json").exists())
+
+            payload = json.loads(failure_path.read_text())
+            self._assert_run_failure_payload_basics(payload, run_dir)
+
+            error_info = payload.get("error", {})
+            error_type = str(error_info.get("type", ""))
+            self.assertIn(error_type.lower(), {"error", "patternerror"})
+            message_lower = str(error_info.get("message", "")).lower()
+            self.assertTrue(
+                "unterminated" in message_lower or "missing )" in message_lower,
+                f"unexpected regex error message: {error_info.get('message')}",
+            )
+
+            traceback_text = payload.get("traceback")
+            self.assertIsInstance(traceback_text, str)
+            self.assertTrue(traceback_text.strip())
+            self.assertIn("Traceback (most recent call last):", traceback_text)
+
+            model_path_info = payload.get("model_path", {})
             self.assertEqual(model_path_info.get("source"), "config")
             self.assertEqual(
                 Path(model_path_info.get("configured")).resolve(),
