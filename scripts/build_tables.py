@@ -332,6 +332,19 @@ def _remove_owned_table_output_path(path: Path) -> None:
     path.unlink()
 
 
+def _remove_stale_tables_manifest_path(run_dir: Path) -> None:
+    manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+    if not manifest_path.exists():
+        return
+    try:
+        rel = manifest_path.resolve().relative_to(run_dir.resolve()).as_posix()
+    except Exception:
+        return
+    if rel != "logs/tables_write_manifest.json":
+        return
+    _remove_owned_table_output_path(manifest_path)
+
+
 def _clear_previous_table_outputs(run_dir: Path) -> None:
     candidate_paths = set()
     artifact_keys = list(_get_table_artifacts_module().DEFAULT_TABLE_ARTIFACT_KEYS)
@@ -346,8 +359,20 @@ def _clear_previous_table_outputs(run_dir: Path) -> None:
                     candidate_paths.add(resolved)
 
     for artifact_key in artifact_keys:
-        candidate_paths.add(run_dir / "tables" / f"{artifact_key}.parquet")
-        candidate_paths.add(run_dir / "tables" / f"{artifact_key}.csv")
+        canonical_parquet = _resolve_previous_table_output_path(
+            run_dir,
+            artifact_key,
+            f"tables/{artifact_key}.parquet",
+        )
+        if canonical_parquet is not None:
+            candidate_paths.add(canonical_parquet)
+        canonical_csv = _resolve_previous_table_output_path(
+            run_dir,
+            artifact_key,
+            f"tables/{artifact_key}.csv",
+        )
+        if canonical_csv is not None:
+            candidate_paths.add(canonical_csv)
 
     tables_dir = run_dir / "tables"
     for path in sorted(candidate_paths):
@@ -355,9 +380,7 @@ def _clear_previous_table_outputs(run_dir: Path) -> None:
             _remove_owned_table_output_path(path)
             _prune_empty_table_dirs(path.parent, tables_dir=tables_dir)
 
-    manifest_path = run_dir / "logs" / "tables_write_manifest.json"
-    if manifest_path.exists():
-        manifest_path.unlink()
+    _remove_stale_tables_manifest_path(run_dir)
 
 
 def _load_config(run_dir: Path) -> Dict[str, Any]:

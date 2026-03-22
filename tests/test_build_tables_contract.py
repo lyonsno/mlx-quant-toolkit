@@ -2,6 +2,7 @@ import csv
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1867,6 +1868,222 @@ class BuildTablesContractTests(unittest.TestCase):
             self.assertFalse(
                 (run_dir / "logs" / "tables_write_manifest.json").exists(),
                 "Duplicate-delta cleanup should still clear the stale tables manifest",
+            )
+
+    def test_build_tables_duplicate_delta_cleanup_does_not_delete_external_symlinked_tables_targets(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                output_format="csv",
+                compression=None,
+                delta_pairs=[
+                    {"name": "delta_ab", "a": "scheme_a", "b": "scheme_b"},
+                ],
+            )
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+            self._write_quant_sim_csv(data_dir, self._sample_quant_rows())
+
+            self._run_build_tables(run_dir)
+
+            outside_tables_dir = Path(tmp_dir) / "outside_tables"
+            outside_tables_dir.mkdir(parents=True, exist_ok=True)
+            external_owned_target = outside_tables_dir / "A_weight_layer_summary.csv"
+            external_owned_target.write_text("sentinel,value\noutside,1\n")
+
+            shutil.rmtree(run_dir / "tables")
+            try:
+                (run_dir / "tables").symlink_to(outside_tables_dir, target_is_directory=True)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"Directory symlink setup unavailable: {exc}")
+
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.15,
+                        "w_rel_max": 0.2,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        # CONTRACT: duplicate-delta cleanup must not follow a
+                        # symlinked tables/ directory outside run_dir and delete
+                        # external files.
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.31,
+                        "w_rel_max": 0.44,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_b",
+                        "w_rel_fro": 0.09,
+                        "w_rel_max": 0.12,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                ],
+            )
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("duplicate", output.lower())
+            self.assertTrue(
+                external_owned_target.exists(),
+                "Duplicate-delta cleanup should not delete external files via symlinked tables/",
+            )
+            self.assertEqual(
+                external_owned_target.read_text(),
+                "sentinel,value\noutside,1\n",
+                "Duplicate-delta cleanup should not rewrite external files via symlinked tables/",
+            )
+
+    def test_build_tables_duplicate_delta_cleanup_handles_manifest_path_as_directory(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                output_format="csv",
+                compression=None,
+                delta_pairs=[
+                    {"name": "delta_ab", "a": "scheme_a", "b": "scheme_b"},
+                ],
+            )
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+            self._write_quant_sim_csv(data_dir, self._sample_quant_rows())
+
+            self._run_build_tables(run_dir)
+
+            manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+            manifest_path.unlink()
+            manifest_path.mkdir()
+
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.15,
+                        "w_rel_max": 0.2,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        # CONTRACT: malformed stale manifest paths must not mask
+                        # the duplicate-key validation error with cleanup failures.
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.31,
+                        "w_rel_max": 0.44,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_b",
+                        "w_rel_fro": 0.09,
+                        "w_rel_max": 0.12,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                ],
+            )
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("duplicate", output.lower())
+            self.assertNotIn("PermissionError", output)
+            self.assertFalse(
+                manifest_path.exists(),
+                "Duplicate-delta cleanup should safely remove malformed manifest directories",
+            )
+            self.assertFalse(
+                (run_dir / "tables" / "A_weight_layer_summary.csv").exists(),
+                "Duplicate-delta cleanup should still clear canonical stale outputs",
             )
 
     def test_build_tables_quant_error_rows_are_represented_in_b_summaries(self):
