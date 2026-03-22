@@ -12,6 +12,7 @@ import argparse
 from datetime import datetime, timezone
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -282,7 +283,15 @@ def _write_df(df: pd.DataFrame, path: Path, fmt: str, compression: str | None) -
     }
 
 
-def _resolve_previous_table_output_path(run_dir: Path, artifact_key: str, raw_path: Any) -> Path | None:
+def _normalized_abspath(path: Path) -> Path:
+    return Path(os.path.abspath(str(path)))
+
+
+def _resolve_owned_cleanup_candidate_path(
+    run_dir: Path,
+    raw_path: Any,
+    expected_rel_path: str,
+) -> Path | None:
     if raw_path is None:
         return None
     path_text = str(raw_path).strip()
@@ -290,19 +299,33 @@ def _resolve_previous_table_output_path(run_dir: Path, artifact_key: str, raw_pa
         return None
     path_text = path_text.replace("\\", "/")
     candidate = Path(path_text)
-    candidate_abs = candidate if candidate.is_absolute() else (run_dir / candidate)
+    candidate_abs = _normalized_abspath(candidate if candidate.is_absolute() else (run_dir / candidate))
+    run_dir_abs = _normalized_abspath(run_dir)
+    expected_abs = _normalized_abspath(run_dir_abs / expected_rel_path)
+    if candidate_abs != expected_abs:
+        return None
     try:
-        rel = candidate_abs.resolve().relative_to(run_dir.resolve()).as_posix()
+        rel = expected_abs.relative_to(run_dir_abs)
     except Exception:
         return None
-    rel_path = Path(rel)
-    if rel_path.parent.as_posix() != "tables":
-        return None
-    if candidate_abs.suffix.lower() not in _TABLE_INPUT_SUFFIXES:
-        return None
-    if rel_path.name not in {f"{artifact_key}.csv", f"{artifact_key}.parquet"}:
-        return None
-    return candidate_abs
+    current = run_dir_abs
+    for part in rel.parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            return None
+    return expected_abs
+
+
+def _resolve_previous_table_output_path(run_dir: Path, artifact_key: str, raw_path: Any) -> Path | None:
+    for suffix in (".csv", ".parquet"):
+        resolved = _resolve_owned_cleanup_candidate_path(
+            run_dir,
+            raw_path,
+            f"tables/{artifact_key}{suffix}",
+        )
+        if resolved is not None:
+            return resolved
+    return None
 
 
 def _prune_empty_table_dirs(path: Path, *, tables_dir: Path) -> None:
@@ -333,14 +356,14 @@ def _remove_owned_table_output_path(path: Path) -> None:
 
 
 def _remove_stale_tables_manifest_path(run_dir: Path) -> None:
-    manifest_path = run_dir / "logs" / "tables_write_manifest.json"
-    if not manifest_path.exists():
+    manifest_path = _resolve_owned_cleanup_candidate_path(
+        run_dir,
+        "logs/tables_write_manifest.json",
+        "logs/tables_write_manifest.json",
+    )
+    if manifest_path is None:
         return
-    try:
-        rel = manifest_path.resolve().relative_to(run_dir.resolve()).as_posix()
-    except Exception:
-        return
-    if rel != "logs/tables_write_manifest.json":
+    if not (manifest_path.exists() or manifest_path.is_symlink()):
         return
     _remove_owned_table_output_path(manifest_path)
 
@@ -376,7 +399,7 @@ def _clear_previous_table_outputs(run_dir: Path) -> None:
 
     tables_dir = run_dir / "tables"
     for path in sorted(candidate_paths):
-        if path.exists():
+        if path.exists() or path.is_symlink():
             _remove_owned_table_output_path(path)
             _prune_empty_table_dirs(path.parent, tables_dir=tables_dir)
 

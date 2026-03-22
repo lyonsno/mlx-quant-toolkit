@@ -2086,6 +2086,226 @@ class BuildTablesContractTests(unittest.TestCase):
                 "Duplicate-delta cleanup should still clear canonical stale outputs",
             )
 
+    def test_build_tables_duplicate_delta_cleanup_unlinks_symlinked_manifest_node_without_touching_target(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                output_format="csv",
+                compression=None,
+                delta_pairs=[
+                    {"name": "delta_ab", "a": "scheme_a", "b": "scheme_b"},
+                ],
+            )
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+            self._write_quant_sim_csv(data_dir, self._sample_quant_rows())
+
+            self._run_build_tables(run_dir)
+
+            external_manifest_target = Path(tmp_dir) / "external_manifest.json"
+            external_manifest_target.write_text('{"sentinel": true}\n')
+            manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+            manifest_path.unlink()
+            try:
+                manifest_path.symlink_to(external_manifest_target)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"Symlink setup unavailable: {exc}")
+
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.15,
+                        "w_rel_max": 0.2,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        # CONTRACT: stale manifest cleanup should unlink the owned
+                        # symlink node under run_dir, not preserve it and not
+                        # modify the external target it points to.
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.31,
+                        "w_rel_max": 0.44,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_b",
+                        "w_rel_fro": 0.09,
+                        "w_rel_max": 0.12,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                ],
+            )
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("duplicate", output.lower())
+            self.assertFalse(
+                manifest_path.exists() or manifest_path.is_symlink(),
+                "Duplicate-delta cleanup should unlink the stale manifest symlink node",
+            )
+            self.assertEqual(
+                external_manifest_target.read_text(),
+                '{"sentinel": true}\n',
+                "Duplicate-delta cleanup should not touch the external manifest target",
+            )
+
+    def test_build_tables_duplicate_delta_cleanup_unlinks_symlinked_canonical_table_node_without_touching_target(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                output_format="csv",
+                compression=None,
+                delta_pairs=[
+                    {"name": "delta_ab", "a": "scheme_a", "b": "scheme_b"},
+                ],
+            )
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+            self._write_quant_sim_csv(data_dir, self._sample_quant_rows())
+
+            self._run_build_tables(run_dir)
+
+            external_table_target = Path(tmp_dir) / "external_A_weight_layer_summary.csv"
+            external_table_target.write_text("sentinel,value\noutside,1\n")
+            stale_symlink = run_dir / "tables" / "A_weight_layer_summary.csv"
+            stale_symlink.unlink()
+            try:
+                stale_symlink.symlink_to(external_table_target)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"Symlink setup unavailable: {exc}")
+
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.15,
+                        "w_rel_max": 0.2,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        # CONTRACT: duplicate-delta cleanup should unlink a stale
+                        # canonical symlink node inside run_dir/tables without
+                        # following it to the external target.
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.31,
+                        "w_rel_max": 0.44,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_b",
+                        "w_rel_fro": 0.09,
+                        "w_rel_max": 0.12,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                ],
+            )
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("duplicate", output.lower())
+            self.assertFalse(
+                stale_symlink.exists() or stale_symlink.is_symlink(),
+                "Duplicate-delta cleanup should unlink stale canonical symlink nodes",
+            )
+            self.assertEqual(
+                external_table_target.read_text(),
+                "sentinel,value\noutside,1\n",
+                "Duplicate-delta cleanup should not touch external table targets",
+            )
+
     def test_build_tables_quant_error_rows_are_represented_in_b_summaries(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir) / "run"
