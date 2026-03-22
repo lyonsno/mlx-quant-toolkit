@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import sys
 from typing import Any, Dict, List
 
@@ -321,6 +322,16 @@ def _prune_empty_table_dirs(path: Path, *, tables_dir: Path) -> None:
         current = current.parent
 
 
+def _remove_owned_table_output_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+        return
+    if path.is_dir():
+        shutil.rmtree(path)
+        return
+    path.unlink()
+
+
 def _clear_previous_table_outputs(run_dir: Path) -> None:
     candidate_paths = set()
     artifact_keys = list(_get_table_artifacts_module().DEFAULT_TABLE_ARTIFACT_KEYS)
@@ -341,7 +352,7 @@ def _clear_previous_table_outputs(run_dir: Path) -> None:
     tables_dir = run_dir / "tables"
     for path in sorted(candidate_paths):
         if path.exists():
-            path.unlink()
+            _remove_owned_table_output_path(path)
             _prune_empty_table_dirs(path.parent, tables_dir=tables_dir)
 
     manifest_path = run_dir / "logs" / "tables_write_manifest.json"

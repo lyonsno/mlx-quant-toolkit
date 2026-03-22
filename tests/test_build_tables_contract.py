@@ -1755,6 +1755,120 @@ class BuildTablesContractTests(unittest.TestCase):
                 "Poisoned manifest paths should not rewrite unrelated sidecars",
             )
 
+    def test_build_tables_duplicate_delta_cleanup_handles_malformed_owned_directory_paths(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                output_format="csv",
+                compression=None,
+                delta_pairs=[
+                    {"name": "delta_ab", "a": "scheme_a", "b": "scheme_b"},
+                ],
+            )
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+            self._write_quant_sim_csv(data_dir, self._sample_quant_rows())
+
+            self._run_build_tables(run_dir)
+
+            malformed_owned_path = run_dir / "tables" / "B_quant_deltas.csv"
+            malformed_owned_path.unlink()
+            malformed_owned_path.mkdir()
+
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.15,
+                        "w_rel_max": 0.2,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        # CONTRACT: duplicate-delta cleanup must tolerate malformed
+                        # stale owned paths like a directory at a canonical table
+                        # filename, and still surface the duplicate-key validation
+                        # error instead of masking it with a cleanup exception.
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.31,
+                        "w_rel_max": 0.44,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_b",
+                        "w_rel_fro": 0.09,
+                        "w_rel_max": 0.12,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                ],
+            )
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("duplicate", output.lower())
+            self.assertNotIn("PermissionError", output)
+            self.assertFalse(
+                malformed_owned_path.exists(),
+                "Duplicate-delta cleanup should remove malformed owned directory paths",
+            )
+            self.assertFalse(
+                (run_dir / "tables" / "A_weight_layer_summary.csv").exists(),
+                "Duplicate-delta cleanup should still clear earlier stale canonical outputs",
+            )
+            self.assertFalse(
+                (run_dir / "tables" / "B_quant_global_summary.csv").exists(),
+                "Duplicate-delta cleanup should still clear later stale canonical outputs",
+            )
+            self.assertFalse(
+                (run_dir / "logs" / "tables_write_manifest.json").exists(),
+                "Duplicate-delta cleanup should still clear the stale tables manifest",
+            )
+
     def test_build_tables_quant_error_rows_are_represented_in_b_summaries(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir) / "run"
