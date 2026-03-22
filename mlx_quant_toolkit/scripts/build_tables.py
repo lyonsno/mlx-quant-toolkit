@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import traceback
 from typing import Any, Dict, List
 
 import pandas as pd
@@ -411,6 +412,68 @@ def _load_config(run_dir: Path) -> Dict[str, Any]:
     return json.loads(cfg_path.read_text())
 
 
+def _system_exit_is_error(exc: SystemExit) -> bool:
+    code = exc.code
+    if code is None:
+        return False
+    if isinstance(code, int):
+        return code != 0
+    return True
+
+
+def _exception_message(exc: BaseException) -> str:
+    if isinstance(exc, SystemExit):
+        code = exc.code
+        if isinstance(code, str):
+            return code
+        if code is None:
+            return "SystemExit"
+        return f"SystemExit({code})"
+    text = str(exc)
+    return text if text else type(exc).__name__
+
+
+def _write_tables_failure_artifact(exc: BaseException, run_dir: Path | None) -> None:
+    if run_dir is None:
+        return
+    if not run_dir.exists() or not run_dir.is_dir():
+        return
+
+    manifest = _safe_read_json_dict(run_dir / "manifest.json")
+    payload: Dict[str, Any] = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "status": "error",
+        "run": {
+            "run_dir": str(run_dir),
+            "model_id": manifest.get("model_id"),
+            "run_name": manifest.get("run_name"),
+            "created_at": manifest.get("created_at"),
+        },
+        "error": {
+            "type": type(exc).__name__,
+            "message": _exception_message(exc),
+        },
+    }
+
+    tb_text = traceback.format_exc()
+    if tb_text and tb_text.strip():
+        payload["traceback"] = tb_text
+
+    try:
+        _write_json(payload, run_dir / "logs" / "tables_failure.json")
+    except Exception:
+        # Best effort only: do not mask the original error.
+        pass
+
+
+def _clear_tables_failure_artifact(run_dir: Path) -> None:
+    try:
+        (run_dir / "logs" / "tables_failure.json").unlink(missing_ok=True)
+    except Exception:
+        # Best effort only: stale failure metadata should not break successful runs.
+        pass
+
+
 def _quantile_func(q: float, label: str):
     def _fn(s: pd.Series):
         return s.quantile(q)
@@ -523,199 +586,208 @@ def main():
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir).expanduser().resolve()
-    cfg = _load_config(run_dir)
-    fmt = cfg.get("output", {}).get("format", "parquet")
-    compression = cfg.get("output", {}).get("compression", None)
-    write_manifest_artifacts: Dict[str, Dict[str, Any]] = {}
-
-    collect_manifest = _safe_read_json_dict(run_dir / "logs" / "write_manifest.json")
-    collect_manifest_artifacts = collect_manifest.get("artifacts", {})
-    if not isinstance(collect_manifest_artifacts, dict):
-        collect_manifest_artifacts = {}
-
-    matrix_stats_input = _resolve_collect_artifact_input_path(
-        run_dir,
-        collect_manifest_artifacts,
-        "matrix_stats",
-    )
-    quant_sim_input = _resolve_collect_artifact_input_path(
-        run_dir,
-        collect_manifest_artifacts,
-        "quant_sim",
-    )
-
-    if matrix_stats_input is None:
-        matrix_stats_input = run_dir / "data" / "matrix_stats.parquet"
-    if quant_sim_input is None:
-        quant_sim_input = run_dir / "data" / "quant_sim.parquet"
-
-    ms = _read_df(
-        matrix_stats_input,
-        empty_columns=MATRIX_STATS_EMPTY_COLUMNS,
-    )
-    qs = _read_df(
-        quant_sim_input,
-        empty_columns=QUANT_SIM_EMPTY_COLUMNS,
-    )
-    ms = _ensure_columns(ms, MATRIX_STATS_AXIS_COLUMNS)
-    # A-table metric columns must stay numeric-friendly when synthesized; using
-    # pd.NA in object dtype can raise during std/mean aggregations on non-empty groups.
-    ms = _ensure_columns(ms, MATRIX_STATS_METRIC_COLUMNS, fill_value=float("nan"))
-    qs = _ensure_columns(qs, QUANT_SIM_AXIS_COLUMNS)
-
-    # ensure block4 exists
-    if "block4" not in ms.columns:
-        ms["block4"] = ms["layer"].floordiv(4)
-    if "block4" not in qs.columns:
-        qs["block4"] = qs["layer"].floordiv(4)
-
-    delta_pairs = cfg.get("delta_pairs", [])
-    delta_metric_values = [c for c in ["w_rel_fro", "w_rel_max"] if c in qs.columns]
     try:
-        _validate_quant_delta_base_keys(qs, delta_pairs, delta_metric_values)
-    except ValueError:
-        # CONTRACT: duplicate delta-key validation is an early-fail path that
-        # must invalidate stale previous tables, but input/read failures that
-        # happen before this point should preserve the last successful outputs.
-        _clear_previous_table_outputs(run_dir)
-        raise
+        cfg = _load_config(run_dir)
+        fmt = cfg.get("output", {}).get("format", "parquet")
+        compression = cfg.get("output", {}).get("compression", None)
+        write_manifest_artifacts: Dict[str, Dict[str, Any]] = {}
 
-    # -------- A: weight stats summaries --------
-    stat_cols = [
-        "mean", "std", "mean_abs", "rms", "max_abs",
-        "p50_abs", "p99_abs", "p999_abs",
-        "outlier_max_over_mean", "outlier_p99_over_median", "outlier_p999_over_median",
-    ]
-    # include any gXX columns that exist
-    stat_cols += [c for c in ms.columns if c.startswith("g") and ("_outlier" in c)]
+        collect_manifest = _safe_read_json_dict(run_dir / "logs" / "write_manifest.json")
+        collect_manifest_artifacts = collect_manifest.get("artifacts", {})
+        if not isinstance(collect_manifest_artifacts, dict):
+            collect_manifest_artifacts = {}
 
-    p90 = _quantile_func(0.90, "p90")
-    p99 = _quantile_func(0.99, "p99")
-    p01 = _quantile_func(0.01, "p01")
+        matrix_stats_input = _resolve_collect_artifact_input_path(
+            run_dir,
+            collect_manifest_artifacts,
+            "matrix_stats",
+        )
+        quant_sim_input = _resolve_collect_artifact_input_path(
+            run_dir,
+            collect_manifest_artifacts,
+            "quant_sim",
+        )
 
-    # per layer/proj
-    A_layer = _agg_with_funcs(ms, ["layer", "proj"], stat_cols, ["median", "mean", "std", p90, p99])
-    # CONTRACT SURFACE: tables/A_weight_layer_summary.{parquet|csv}
-    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
-    # Tests: rg 'A_weight_layer_summary' tests/
-    write_manifest_artifacts["A_weight_layer_summary"] = _normalize_write_meta(
-        _write_df(A_layer, run_dir / "tables" / "A_weight_layer_summary.parquet", fmt, compression),
-        run_dir,
-    )
+        if matrix_stats_input is None:
+            matrix_stats_input = run_dir / "data" / "matrix_stats.parquet"
+        if quant_sim_input is None:
+            quant_sim_input = run_dir / "data" / "quant_sim.parquet"
 
-    # per block4/proj
-    A_block4 = _agg_with_funcs(ms, ["block4", "proj"], stat_cols, ["median", "mean", "std", p90, p99])
-    # CONTRACT SURFACE: tables/A_weight_block4_summary.{parquet|csv}
-    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
-    # Tests: rg 'A_weight_block4_summary' tests/
-    write_manifest_artifacts["A_weight_block4_summary"] = _normalize_write_meta(
-        _write_df(A_block4, run_dir / "tables" / "A_weight_block4_summary.parquet", fmt, compression),
-        run_dir,
-    )
+        ms = _read_df(
+            matrix_stats_input,
+            empty_columns=MATRIX_STATS_EMPTY_COLUMNS,
+        )
+        qs = _read_df(
+            quant_sim_input,
+            empty_columns=QUANT_SIM_EMPTY_COLUMNS,
+        )
+        ms = _ensure_columns(ms, MATRIX_STATS_AXIS_COLUMNS)
+        # A-table metric columns must stay numeric-friendly when synthesized; using
+        # pd.NA in object dtype can raise during std/mean aggregations on non-empty groups.
+        ms = _ensure_columns(ms, MATRIX_STATS_METRIC_COLUMNS, fill_value=float("nan"))
+        qs = _ensure_columns(qs, QUANT_SIM_AXIS_COLUMNS)
 
-    # global/proj
-    A_global = _agg_with_funcs(ms, ["proj"], stat_cols, ["min", p01, "median", p99, "max"])
-    # CONTRACT SURFACE: tables/A_weight_global_summary.{parquet|csv}
-    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
-    # Tests: rg 'A_weight_global_summary' tests/
-    write_manifest_artifacts["A_weight_global_summary"] = _normalize_write_meta(
-        _write_df(A_global, run_dir / "tables" / "A_weight_global_summary.parquet", fmt, compression),
-        run_dir,
-    )
+        # ensure block4 exists
+        if "block4" not in ms.columns:
+            ms["block4"] = ms["layer"].floordiv(4)
+        if "block4" not in qs.columns:
+            qs["block4"] = qs["layer"].floordiv(4)
 
-    # -------- B: quant sim summaries --------
-    qcols = QUANT_METRIC_COLUMNS
-    qcols = [c for c in qcols if c in qs.columns]
+        delta_pairs = cfg.get("delta_pairs", [])
+        delta_metric_values = [c for c in ["w_rel_fro", "w_rel_max"] if c in qs.columns]
+        try:
+            _validate_quant_delta_base_keys(qs, delta_pairs, delta_metric_values)
+        except ValueError:
+            # CONTRACT: duplicate delta-key validation is an early-fail path that
+            # must invalidate stale previous tables, but input/read failures that
+            # happen before this point should preserve the last successful outputs.
+            _clear_previous_table_outputs(run_dir)
+            raise
 
-    B_layer = _agg_with_funcs(qs, ["layer", "proj", "scheme"], qcols, ["median", "mean", p90, p99])
-    # CONTRACT SURFACE: tables/B_quant_layer_summary.{parquet|csv}
-    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
-    # Tests: rg 'B_quant_layer_summary' tests/
-    write_manifest_artifacts["B_quant_layer_summary"] = _normalize_write_meta(
-        _write_df(B_layer, run_dir / "tables" / "B_quant_layer_summary.parquet", fmt, compression),
-        run_dir,
-    )
+        # -------- A: weight stats summaries --------
+        stat_cols = [
+            "mean", "std", "mean_abs", "rms", "max_abs",
+            "p50_abs", "p99_abs", "p999_abs",
+            "outlier_max_over_mean", "outlier_p99_over_median", "outlier_p999_over_median",
+        ]
+        # include any gXX columns that exist
+        stat_cols += [c for c in ms.columns if c.startswith("g") and ("_outlier" in c)]
 
-    B_block4 = _agg_with_funcs(qs, ["block4", "proj", "scheme"], qcols, ["median", "mean", p90, p99])
-    # CONTRACT SURFACE: tables/B_quant_block4_summary.{parquet|csv}
-    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
-    # Tests: rg 'B_quant_block4_summary' tests/
-    write_manifest_artifacts["B_quant_block4_summary"] = _normalize_write_meta(
-        _write_df(B_block4, run_dir / "tables" / "B_quant_block4_summary.parquet", fmt, compression),
-        run_dir,
-    )
+        p90 = _quantile_func(0.90, "p90")
+        p99 = _quantile_func(0.99, "p99")
+        p01 = _quantile_func(0.01, "p01")
 
-    B_global = _agg_with_funcs(qs, ["proj", "scheme"], qcols, ["min", p01, "median", p99, "max"])
-    # CONTRACT SURFACE: tables/B_quant_global_summary.{parquet|csv}
-    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
-    # Tests: rg 'B_quant_global_summary' tests/
-    write_manifest_artifacts["B_quant_global_summary"] = _normalize_write_meta(
-        _write_df(B_global, run_dir / "tables" / "B_quant_global_summary.parquet", fmt, compression),
-        run_dir,
-    )
-
-    # -------- deltas (scheme A - scheme B) --------
-    if delta_pairs:
-        base_index = ["derived_tensor", "layer", "block4", "proj", "expert_id", "rows", "cols"]
-        for col in base_index:
-            if col not in qs.columns:
-                qs[col] = pd.NA
-        if delta_metric_values:
-            pivot = qs.pivot_table(
-                index=base_index,
-                columns="scheme",
-                values=delta_metric_values,
-                aggfunc="first",
-            )
-            pivot.columns = [f"{metric}__{scheme}" for (metric, scheme) in pivot.columns]
-            pivot = pivot.reset_index()
-        else:
-            pivot = qs[base_index].drop_duplicates().reset_index(drop=True)
-
-        delta_rows = []
-        for pair in delta_pairs:
-            a = pair["a"]
-            b = pair["b"]
-            name = pair["name"]
-
-            fro_a = f"w_rel_fro__{a}"
-            fro_b = f"w_rel_fro__{b}"
-            max_a = f"w_rel_max__{a}"
-            max_b = f"w_rel_max__{b}"
-
-            df = pivot[base_index].copy()
-            df["delta_name"] = name
-
-            df["delta_w_rel_fro"] = None
-            df["delta_w_rel_max"] = None
-            if fro_a in pivot.columns and fro_b in pivot.columns:
-                df["delta_w_rel_fro"] = pivot[fro_a] - pivot[fro_b]
-            if max_a in pivot.columns and max_b in pivot.columns:
-                df["delta_w_rel_max"] = pivot[max_a] - pivot[max_b]
-
-            delta_rows.append(df)
-
-        deltas = pd.concat(delta_rows, ignore_index=True) if delta_rows else pd.DataFrame()
-        # CONTRACT SURFACE: tables/B_quant_deltas.{parquet|csv}
+        # per layer/proj
+        A_layer = _agg_with_funcs(ms, ["layer", "proj"], stat_cols, ["median", "mean", "std", p90, p99])
+        # CONTRACT SURFACE: tables/A_weight_layer_summary.{parquet|csv}
         # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
-        # Tests: rg 'B_quant_deltas' tests/
-        write_manifest_artifacts["B_quant_deltas"] = _normalize_write_meta(
-            _write_df(deltas, run_dir / "tables" / "B_quant_deltas.parquet", fmt, compression),
+        # Tests: rg 'A_weight_layer_summary' tests/
+        write_manifest_artifacts["A_weight_layer_summary"] = _normalize_write_meta(
+            _write_df(A_layer, run_dir / "tables" / "A_weight_layer_summary.parquet", fmt, compression),
             run_dir,
         )
 
-    tables_write_manifest = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "requested_format": fmt,
-        "requested_compression": compression,
-        "artifacts": write_manifest_artifacts,
-    }
-    # CONTRACT SURFACE: logs/tables_write_manifest.json
-    # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
-    # Tests: rg 'tables_write_manifest' tests/
-    _write_json(tables_write_manifest, run_dir / "logs" / "tables_write_manifest.json")
+        # per block4/proj
+        A_block4 = _agg_with_funcs(ms, ["block4", "proj"], stat_cols, ["median", "mean", "std", p90, p99])
+        # CONTRACT SURFACE: tables/A_weight_block4_summary.{parquet|csv}
+        # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+        # Tests: rg 'A_weight_block4_summary' tests/
+        write_manifest_artifacts["A_weight_block4_summary"] = _normalize_write_meta(
+            _write_df(A_block4, run_dir / "tables" / "A_weight_block4_summary.parquet", fmt, compression),
+            run_dir,
+        )
 
-    print("[build_tables] wrote tables/ A_* and B_*")
+        # global/proj
+        A_global = _agg_with_funcs(ms, ["proj"], stat_cols, ["min", p01, "median", p99, "max"])
+        # CONTRACT SURFACE: tables/A_weight_global_summary.{parquet|csv}
+        # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+        # Tests: rg 'A_weight_global_summary' tests/
+        write_manifest_artifacts["A_weight_global_summary"] = _normalize_write_meta(
+            _write_df(A_global, run_dir / "tables" / "A_weight_global_summary.parquet", fmt, compression),
+            run_dir,
+        )
+
+        # -------- B: quant sim summaries --------
+        qcols = QUANT_METRIC_COLUMNS
+        qcols = [c for c in qcols if c in qs.columns]
+
+        B_layer = _agg_with_funcs(qs, ["layer", "proj", "scheme"], qcols, ["median", "mean", p90, p99])
+        # CONTRACT SURFACE: tables/B_quant_layer_summary.{parquet|csv}
+        # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+        # Tests: rg 'B_quant_layer_summary' tests/
+        write_manifest_artifacts["B_quant_layer_summary"] = _normalize_write_meta(
+            _write_df(B_layer, run_dir / "tables" / "B_quant_layer_summary.parquet", fmt, compression),
+            run_dir,
+        )
+
+        B_block4 = _agg_with_funcs(qs, ["block4", "proj", "scheme"], qcols, ["median", "mean", p90, p99])
+        # CONTRACT SURFACE: tables/B_quant_block4_summary.{parquet|csv}
+        # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+        # Tests: rg 'B_quant_block4_summary' tests/
+        write_manifest_artifacts["B_quant_block4_summary"] = _normalize_write_meta(
+            _write_df(B_block4, run_dir / "tables" / "B_quant_block4_summary.parquet", fmt, compression),
+            run_dir,
+        )
+
+        B_global = _agg_with_funcs(qs, ["proj", "scheme"], qcols, ["min", p01, "median", p99, "max"])
+        # CONTRACT SURFACE: tables/B_quant_global_summary.{parquet|csv}
+        # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+        # Tests: rg 'B_quant_global_summary' tests/
+        write_manifest_artifacts["B_quant_global_summary"] = _normalize_write_meta(
+            _write_df(B_global, run_dir / "tables" / "B_quant_global_summary.parquet", fmt, compression),
+            run_dir,
+        )
+
+        # -------- deltas (scheme A - scheme B) --------
+        if delta_pairs:
+            base_index = ["derived_tensor", "layer", "block4", "proj", "expert_id", "rows", "cols"]
+            for col in base_index:
+                if col not in qs.columns:
+                    qs[col] = pd.NA
+            if delta_metric_values:
+                pivot = qs.pivot_table(
+                    index=base_index,
+                    columns="scheme",
+                    values=delta_metric_values,
+                    aggfunc="first",
+                )
+                pivot.columns = [f"{metric}__{scheme}" for (metric, scheme) in pivot.columns]
+                pivot = pivot.reset_index()
+            else:
+                pivot = qs[base_index].drop_duplicates().reset_index(drop=True)
+
+            delta_rows = []
+            for pair in delta_pairs:
+                a = pair["a"]
+                b = pair["b"]
+                name = pair["name"]
+
+                fro_a = f"w_rel_fro__{a}"
+                fro_b = f"w_rel_fro__{b}"
+                max_a = f"w_rel_max__{a}"
+                max_b = f"w_rel_max__{b}"
+
+                df = pivot[base_index].copy()
+                df["delta_name"] = name
+
+                df["delta_w_rel_fro"] = None
+                df["delta_w_rel_max"] = None
+                if fro_a in pivot.columns and fro_b in pivot.columns:
+                    df["delta_w_rel_fro"] = pivot[fro_a] - pivot[fro_b]
+                if max_a in pivot.columns and max_b in pivot.columns:
+                    df["delta_w_rel_max"] = pivot[max_a] - pivot[max_b]
+
+                delta_rows.append(df)
+
+            deltas = pd.concat(delta_rows, ignore_index=True) if delta_rows else pd.DataFrame()
+            # CONTRACT SURFACE: tables/B_quant_deltas.{parquet|csv}
+            # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+            # Tests: rg 'B_quant_deltas' tests/
+            write_manifest_artifacts["B_quant_deltas"] = _normalize_write_meta(
+                _write_df(deltas, run_dir / "tables" / "B_quant_deltas.parquet", fmt, compression),
+                run_dir,
+            )
+
+        tables_write_manifest = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "requested_format": fmt,
+            "requested_compression": compression,
+            "artifacts": write_manifest_artifacts,
+        }
+        # CONTRACT SURFACE: logs/tables_write_manifest.json
+        # Prefer additive changes; don't rename/remove without explicit request. See README: Run outputs / Auditability artifacts.
+        # Tests: rg 'tables_write_manifest' tests/
+        _write_json(tables_write_manifest, run_dir / "logs" / "tables_write_manifest.json")
+        _clear_tables_failure_artifact(run_dir)
+
+        print("[build_tables] wrote tables/ A_* and B_*")
+    except SystemExit as exc:
+        if _system_exit_is_error(exc):
+            _write_tables_failure_artifact(exc, run_dir)
+        raise
+    except Exception as exc:
+        _write_tables_failure_artifact(exc, run_dir)
+        raise
 
 
 if __name__ == "__main__":

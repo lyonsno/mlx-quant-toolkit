@@ -76,6 +76,7 @@ class BuildTablesContractTests(unittest.TestCase):
         "bias_mean",
         "bias_max",
     ]
+    _TABLES_FAILURE_REQUIRED_KEYS = {"generated_at", "status", "run", "error"}
 
     def setUp(self):
         self.repo_root = Path(__file__).resolve().parents[1]
@@ -145,6 +146,23 @@ class BuildTablesContractTests(unittest.TestCase):
             reader = csv.DictReader(handle)
             rows = list(reader)
         return reader.fieldnames, rows
+
+    def _assert_tables_failure_payload_basics(self, payload: dict, run_dir: Path):
+        self.assertIsInstance(payload, dict)
+        missing = sorted(self._TABLES_FAILURE_REQUIRED_KEYS - set(payload))
+        self.assertFalse(missing, f"tables_failure missing keys: {missing}")
+        self.assertEqual(payload.get("status"), "error")
+
+        run_info = payload.get("run", {})
+        self.assertIsInstance(run_info, dict)
+        self.assertEqual(run_info.get("run_dir"), str(run_dir.resolve()))
+
+        error_info = payload.get("error", {})
+        self.assertIsInstance(error_info, dict)
+        self.assertIsInstance(error_info.get("type"), str)
+        self.assertTrue(error_info.get("type"))
+        self.assertIsInstance(error_info.get("message"), str)
+        self.assertTrue(error_info.get("message"))
 
     def _expected_a_columns(self, group_cols, agg_cols):
         cols = list(group_cols)
@@ -1524,6 +1542,159 @@ class BuildTablesContractTests(unittest.TestCase):
                 first_manifest,
                 "Input-read failures should leave the previous tables manifest unchanged",
             )
+
+    def test_build_tables_hard_fail_missing_quant_sim_writes_tables_failure_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                output_format="csv",
+                compression=None,
+            )
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+            # Deliberately do not create data/quant_sim.csv.
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("quant_sim", output)
+
+            failure_path = run_dir / "logs" / "tables_failure.json"
+            self.assertTrue(
+                failure_path.exists(),
+                "Hard build_tables failures should write logs/tables_failure.json",
+            )
+            payload = json.loads(failure_path.read_text())
+            self._assert_tables_failure_payload_basics(payload, run_dir)
+
+            error_info = payload.get("error", {})
+            self.assertEqual(error_info.get("type"), "FileNotFoundError")
+            self.assertIn("quant_sim", str(error_info.get("message")))
+
+            traceback_text = payload.get("traceback")
+            self.assertIsInstance(traceback_text, str)
+            self.assertIn("FileNotFoundError", traceback_text)
+
+            self.assertFalse(
+                (run_dir / "logs" / "tables_write_manifest.json").exists(),
+                "Hard failures should not emit tables_write_manifest.json",
+            )
+
+    def test_build_tables_success_clears_stale_tables_failure_artifact_from_prior_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                output_format="csv",
+                compression=None,
+            )
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
+            failed = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (failed.stdout or "") + (failed.stderr or "")
+            self.assertNotEqual(failed.returncode, 0, output)
+
+            failure_path = run_dir / "logs" / "tables_failure.json"
+            self.assertTrue(
+                failure_path.exists(),
+                "Expected first failed run to write tables_failure.json",
+            )
+
+            self._write_quant_sim_csv(data_dir, self._sample_quant_rows())
+            self._run_build_tables(run_dir)
+
+            self.assertFalse(
+                failure_path.exists(),
+                "Successful build_tables reruns should clear stale tables_failure.json",
+            )
+            self.assertTrue((run_dir / "logs" / "tables_write_manifest.json").exists())
+
+    def test_build_tables_nonexistent_run_dir_failure_does_not_materialize_run_tree(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "missing-run-dir"
+            self.assertFalse(run_dir.exists())
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+
+            # CONTRACT: typo/nonexistent run-dir failures should not create a run
+            # directory tree as a side effect of failure artifact handling.
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("analysis_config", output)
+            self.assertFalse(
+                run_dir.exists(),
+                "Nonexistent run-dir failures should not create run_dir/logs side effects",
+            )
+
+    def test_build_tables_programmatic_main_failure_writes_tables_failure_artifact(self):
+        mod = _load_module("build_tables_programmatic_failure_contract", self._build_tables_path())
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                output_format="csv",
+                compression=None,
+            )
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+            # Deliberately do not write quant_sim.csv so main() fails.
+
+            old_argv = sys.argv
+            try:
+                sys.argv = ["build_tables.py", "--run-dir", str(run_dir)]
+                with self.assertRaises(FileNotFoundError):
+                    mod.main()
+            finally:
+                sys.argv = old_argv
+
+            failure_path = run_dir / "logs" / "tables_failure.json"
+            self.assertTrue(
+                failure_path.exists(),
+                "Programmatic main() hard failures should emit tables_failure.json",
+            )
+            payload = json.loads(failure_path.read_text())
+            self._assert_tables_failure_payload_basics(payload, run_dir)
+            error_info = payload.get("error", {})
+            self.assertEqual(error_info.get("type"), "FileNotFoundError")
 
     def test_build_tables_duplicate_delta_cleanup_preserves_unrelated_table_sidecars(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
