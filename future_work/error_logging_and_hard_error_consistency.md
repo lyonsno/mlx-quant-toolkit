@@ -1,9 +1,7 @@
-# Error logging + hard-error consistency (unified inventory + recommendations)
+# Error logging + hard-error consistency (updated status + remaining work)
 
-This note unifies two inventories of:
-- what “error types” exist in the pipeline today,
-- where each is recorded (stdout/stderr vs durable artifacts),
-- and what policy decisions would make hard errors consistent and auditable.
+This note tracks what hard-failure auditability exists today, what contracts have already been chosen,
+and what still remains worth doing.
 
 Scope: `scripts/collect_data.py`, `scripts/build_tables.py`, and the run artifacts under `runs/<model>/<run>/`.
 
@@ -11,149 +9,154 @@ Scope: `scripts/collect_data.py`, `scripts/build_tables.py`, and the run artifac
 
 ## Quick takeaway
 
-Today, “hard errors” are inconsistent:
-- some are `SystemExit` with a short message (no traceback),
-- others are uncaught exceptions with a traceback,
-- and almost none of them persist structured run artifacts because `run_context.json`, `run_health.json`,
-  `write_manifest.json`, and `warnings.*` are written at the end of a successful run.
+The repo is in much better shape than the original inventory:
 
-Separately, `scan.strict_index` semantics are currently “strict only when an index is active”, but tests/readme
-have been trending toward “strict implies index must be active and valid”.
+- `collect_data.py` now writes `logs/run_failure.json` on hard failures.
+- `build_tables.py` now writes `logs/tables_failure.json` on hard failures.
+- `build_tables.py` also records table writes and parquet-to-CSV fallback behavior in `logs/tables_write_manifest.json`.
+- `scan.strict_index` is no longer an open policy question:
+  - `scan.strict_index=True` requires `scan.use_safetensors_index_json=True`
+  - and requires an active, successfully parsed index
+  - missing indexed shards still fail hard as before
 
----
-
-## Error type inventory (union)
-
-### Hard errors (non-zero exit / crash)
-
-#### `scripts/collect_data.py`
-
-1) **Explicit `SystemExit` (short message, no traceback)**
-- Missing `analysis_config.json`: `_load_config()` raises `SystemExit`.
-- `model_path` does not exist: `main()` raises `SystemExit`.
-- `scan.strict_index=True` + missing indexed shard(s) *when index is active (`index_ready`)*: `SystemExit`.
-
-**Recording surfaces**
-- stderr/stdout only.
-- No `logs/run_context.json`, `logs/run_health.json`, `logs/write_manifest.json`, `logs/warnings.*` because the run
-  aborts before the “write outputs + write logs” block.
-
-2) **Explicit exception raised to crash (traceback)**
-- `PackedSplitError` from packed split mismatch when `parsing.strict_packed_split=True`.
-
-**Recording surfaces**
-- traceback only.
-- Early artifacts may already exist (e.g., metadata files) if they were written before the crash.
-
-3) **Implicit/unhandled exceptions (traceback)**
-- Invalid config JSON (`JSONDecodeError`) and missing required keys (`KeyError`).
-- Invalid regex compilation (`re.error`).
-- Corrupt/invalid weight files (`.safetensors`, `.npz`) and safetensors/zip exceptions.
-- bfloat16 decode path raising `RuntimeError` when NumPy cannot decode `bfloat16`.
-
-**Recording surfaces**
-- traceback only.
-- No structured run logs unless they were written earlier (rare today).
-
-#### `scripts/build_tables.py`
-- Missing input data: `_read_df(...)` raises `FileNotFoundError`.
-- Unexpected schemas: pandas errors (e.g., `KeyError` on missing columns).
-
-**Recording surfaces**
-- traceback only.
-- No structured “tables run context” artifacts.
-- Parquet write fallback is silent (CSV is written, but the exception is not recorded anywhere).
-
-#### `scripts/init_run.py`
-- Mostly unhandled filesystem/argparse errors (permissions, invalid paths, etc.).
+The main remaining auditability improvement is optional polish: decide whether to write an early
+`logs/run_health.json` status like `"running"` and then overwrite it on success/failure.
 
 ---
 
-### Recorded warnings / soft errors (run continues)
+## Hard-failure inventory (current state)
 
-These are typically recorded only if `collect_data.py` reaches the end-of-run write phase.
+### `scripts/collect_data.py`
 
-#### `logs/warnings.{parquet|csv}` (via `warn_log`)
-Produced by `collect_data.py` under prefixes:
-- `[meta]`: metadata/config.json missing/invalid, metadata module unavailable
-- `[index]`: index module/helpers unavailable; index parse failure; index coverage mismatches
-- `[extract]`: rule application failures; fallback extraction failures; packed_split mismatch when non-strict
-- `[quant_sim]`: MLX missing; per-scheme quantize/dequant failures
+Current hard-failure paths include:
 
-#### Index reporting
-- `logs/index_report.json` is written only when the index successfully parses (`index_active`) and the run completes.
+- explicit `SystemExit`
+  - missing `analysis_config.json`
+  - missing `model_path`
+  - `scan.strict_index=True` with `use_safetensors_index_json=False`
+  - `scan.strict_index=True` without an active parsed index
+  - missing indexed shards when strict index scan is active
+- explicit raised exceptions
+  - `PackedSplitError` when `parsing.strict_packed_split=True`
+- unhandled exceptions
+  - invalid config JSON
+  - invalid regex compilation
+  - corrupt/invalid weight files
+  - decode/runtime failures in dependency paths
 
-#### Quant simulation per-row failures
-- `data/quant_sim.*` contains an `error` column for scheme failures (rows still emitted for coverage).
+Current recording surfaces:
 
-#### Parquet → CSV fallback recording
-- `collect_data.py` records fallback + error string in `logs/write_manifest.json` per artifact.
-- `build_tables.py` falls back to CSV but does not record the failure (no manifest).
+- `logs/run_failure.json` on hard failures
+- `logs/run_context.json`, `logs/run_health.json`, `logs/write_manifest.json`, and `logs/warnings.*` on successful completion
+- `data/quant_sim.*` per-row `error` values for quant-scheme failures that do not abort the run
 
-#### Run summary counts
-- `logs/run_health.json` includes `outputs_written.warnings_rows` and index summary counts.
+Remaining gap:
 
----
+- there is still no early “started/running” health artifact written before the run does meaningful work
 
-## `strict_index` semantics: current vs intended
+### `scripts/build_tables.py`
 
-### What code does today
-- Index discovery + parsing produces `index_ready` only when:
-  - index usage is enabled (`use_safetensors_index_json=True`),
-  - index exists,
-  - and index parsing succeeds.
-- `scan.strict_index=True` only enforces shard presence when `index_ready` is true (missing shards => hard error).
-- Missing index / invalid index parse currently becomes:
-  - warning(s) in `warn_log`,
-  - status `not_found`/`error`,
-  - and fallback to directory walk scan mode.
+Current hard-failure paths include:
 
-### What tests are starting to require
-Some integration tests expect:
-- `scan.strict_index=True` implies “must have an active index”; missing or invalid index should hard fail.
-- `scan.strict_index=True` with `use_safetensors_index_json=False` should hard fail.
+- missing input data (`FileNotFoundError`)
+- unexpected schemas / missing columns (for example pandas `KeyError`)
+- duplicate base keys for `B_quant_deltas`
+- other runtime exceptions during aggregation or writing
 
-This is a policy decision: both interpretations are reasonable; we just need one coherent contract.
+Current recording surfaces:
 
----
+- `logs/tables_failure.json` on hard failures
+- `logs/tables_write_manifest.json` on successful completion, including fallback metadata
+- `tables/*.csv|parquet` outputs on successful completion
 
-## Recommendations (smallest coherent set)
+Current cleanup behavior:
 
-### 1) Make hard failures auditable (structured failure artifact)
-Add a top-level `try/except/finally` in `scripts/collect_data.py` that guarantees at least one durable artifact
-even when the run fails early. Two reasonable patterns:
+- duplicate-delta rerun failures invalidate stale owned `build_tables` outputs without wiping unrelated sidecars
+- cleanup is hardened for poisoned manifests, symlinks, malformed owned paths, and rerun containment
 
-- **Option A: `logs/run_failure.json` (new file)**
-  - Written on any exception / `SystemExit`.
-  - Records: timestamps, resolved model_path, configured vs overridden model_path, index status at time of failure,
-    exception type/message, and optionally a trimmed traceback.
+### `scripts/init_run.py`
 
-- **Option B: extend `logs/run_health.json` to support `status="error"`**
-  - Write an initial “running” or “started” record early, then overwrite on success with `status="success"` or
-    overwrite on error with `status="error"`.
-  - Keeps a single “health” file but changes its semantics (needs careful contract update).
+Still mostly conventional CLI behavior:
 
-Either way: aim to always write a minimal `logs/run_context.json` early too (even if incomplete).
+- argparse / filesystem failures surface directly
+- no structured failure artifact today
 
-### 2) Decide and enforce `strict_index` contract
-Pick one:
-- **Contract 1 (permissive strict):** strict only applies if index is active; otherwise warn + fallback.
-- **Contract 2 (strict means strict):** if `scan.strict_index=True`, then require:
-  - `use_safetensors_index_json=True`
-  - index exists and parses successfully
-  - (and then enforce missing shards as today)
-
-Then align:
-- code behavior,
-- test expectations in `tests/test_safetensors_index_integration.py`,
-- README config docs.
-
-### 3) `build_tables.py` auditability (handled)
-This is now implemented via `logs/tables_write_manifest.json`, including fallback and output-path metadata.
+That is acceptable for now unless we decide we want the same auditability pattern across every entrypoint.
 
 ---
 
-## Suggested next actions (if prioritizing)
+## Soft-error / warning inventory (current state)
 
-1) Choose `strict_index` contract (this unblocks test alignment).
-2) Add failure artifact emission for `collect_data.py` (most value for “auditability when things go wrong”).
+### `collect_data.py`
+
+Recorded on successful run completion via `logs/warnings.{parquet|csv}`:
+
+- `[meta]` metadata/config parsing issues
+- `[index]` index discovery/parse/coverage warnings in non-strict paths
+- `[extract]` extraction fallbacks and non-strict packed-split mismatches
+- `[quant_sim]` MLX unavailable or per-scheme quant failures
+
+Additional surfaces:
+
+- `logs/index_report.json` when index parsing succeeds and the run completes
+- `logs/write_manifest.json` for collect-stage artifact writes and fallback metadata
+- `logs/run_health.json` summary counts
+
+### `build_tables.py`
+
+Recorded on successful completion via:
+
+- `logs/tables_write_manifest.json`
+  - artifact paths
+  - requested format/compression
+  - parquet-to-CSV fallback metadata where relevant
+
+Unlike the earlier state of the repo, parquet fallback in `build_tables.py` is no longer silent.
+
+---
+
+## `strict_index` contract (chosen and enforced)
+
+The repo now uses the stricter contract:
+
+- `scan.strict_index=True` requires `scan.use_safetensors_index_json=True`
+- `scan.strict_index=True` requires an active parsed index
+- if an active index is in use, missing indexed shards are a hard error
+- for file `model_path`, index discovery may still be logged explicitly, but scan expansion does not occur through the index
+
+This contract is now aligned across:
+
+- code in `scripts/collect_data.py`
+- integration tests
+- README / safetensors index docs
+
+So this is no longer a pending policy decision.
+
+---
+
+## Remaining worthwhile work
+
+### 1) Optional early `run_health.json`
+
+Decide whether to emit a minimal early health artifact like:
+
+- `status: "running"`
+- `started_at`
+- `run_dir`
+
+and then overwrite it later with success or error state.
+
+Why it still matters:
+
+- even with `run_failure.json`, a very early crash currently leaves less “shape of the run” context than a started health record would
+
+### 2) Keep the docs aligned as hardening lands
+
+This note originally described a much rougher pre-hardening state. If more auditability work lands later,
+update this file and [current_work.md](./current_work.md) together so they stay consistent.
+
+### 3) Decide whether `init_run.py` needs structured failure artifacts
+
+This is low priority. The current repo behavior is acceptable, but if we want one consistent story for every CLI stage,
+`init_run.py` is the remaining outlier.
+

@@ -1,40 +1,54 @@
-Remaining Identified Issues
+Current State
 
-- Hard errors are inconsistently surfaced (SystemExit vs tracebacks) and usually produce no structured failure artifacts. See `future_work/error_logging_and_hard_error_consistency.md`.
+- The packaged CLI surface is now the supported entrypoint:
+  - `mlx-quant-init`
+  - `mlx-quant-collect`
+  - `mlx-quant-build-tables`
+  - `mlx-quant-build-plots`
+- The placeholder top-level `main.py` entrypoint has been removed.
+- The repo now ships an MIT [LICENSE], and `pyproject.toml` declares modern project-level MIT license metadata.
+- `build_tables.py` now has:
+  - duplicate-key hardening for `B_quant_deltas`
+  - rerun-safe stale-output cleanup
+  - cleanup containment for symlinks, poisoned manifests, and malformed owned paths
+  - structured hard-failure artifacts via `logs/tables_failure.json`
+- `collect_data.py` and `build_tables.py` both have stronger hard-failure audit coverage.
+- `scan.strict_index` now requires an active index when enabled, and docs/tests are aligned to that contract.
 
-Planned Changes
+Remaining High-Value Work
 
-- Harden hard-error surfacing to be consistent and produce structured failure artifacts.
-- Add CLI entry point to `main.py` and remove placeholder.
-- Add license file.
-- Defer plotting ingestion wiring until hardening is complete:
-  - We now have `scripts/plot_inputs.py::normalize_plot_axis_columns(df, axis_columns=("layer", "block4"))`
-    with contract tests in `tests/test_plot_inputs_contract.py`.
-  - Next plotting-stage step (deferred): apply this normalization at the single table-ingestion boundary
-    (manifest-driven artifact discovery/load path) so all plotting consumers get stable nullable-int axis dtypes
-    without per-plot duplication.
+- Refresh [future_work/error_logging_and_hard_error_consistency.md](./error_logging_and_hard_error_consistency.md)
+  to match what has already landed:
+  - `build_tables.py` hard-failure artifacts are implemented
+  - `strict_index` contract has been chosen and enforced
+  - the main unresolved hard-error auditability gap is now `collect_data.py` follow-on polish, not the original broad inventory
+- Decide whether to add an early `logs/run_health.json` "running" record that gets overwritten on success/failure.
+  - This is still optional, but it is the clearest remaining auditability improvement for crash scenarios.
 
-Open Questions
+Refactor-Adjacent Optional Improvements
 
-- We need to pick a license.
+- Automate the release smoke we already ran manually:
+  - clean `build/` and `dist/`
+  - build wheel/sdist
+  - install into a temp target
+  - assert `import mlx_quant_toolkit.scripts.init_run` works
+  - assert `import scripts` does not become the install surface
+- Emit a warning when `delta_pairs` references schemes not present in `quant_sim`.
+- Review whether any script/package-local duplication should get a sync guard test during the refactor.
 
-Recently Resolved (doc drift cleanup)
-- Optional dependency packaging issue has been handled: `pyproject.toml` now clearly separates base dependencies from `optional-dependencies` extras.
-- `packed_split.projs` values are canonicalized through `parsing.proj_aliases` for packed splits, so known aliases (e.g., `w1`/`w2`) now emit canonical `proj`/`derived_tensor` labels.
-- Unmapped proj canonicalization uncertainty is now surfaced end-of-run via `logs/proj_canonicalization_report.{parquet|csv}` with aggregated rows, plus warning summaries in `logs/warnings.*`:
-  - kept-raw summary: `[proj] unmapped proj tokens kept raw: ... See ...` (counts from `action="kept_raw"` only)
-  - strict-drop summary: `[proj] strict proj_group dropped tensors due to unmapped proj tokens: ... See ...` (from `action="dropped_strict"` rows)
-- Add context manager around opening .npz files
-- Add `logs/run_health.json` summarizing: files scanned, tensors observed, extracted-by-rule vs fallback counts, unmatched count, and (if index-active) missing/extra shard/tensor counts.
-- Add run-level visibility for fallback usage (via `logs/run_health.json` counts for rule vs fallback extraction).
-- `proj_group` captures are canonicalized via `parsing.proj_aliases` (tests: `tests/test_proj_group_normalization.py`).
-- `model_path` supports single-file checkpoints via `_iter_weight_files` (tests: `tests/test_proj_group_normalization.py`).
-- `scan.strict_index` now requires an active index (missing/invalid is a hard error), and single-file `model_path` no longer expands via index; index discovery is still logged explicitly.
-- Delta math in `build_tables.py` is covered with deterministic values (tests: `tests/test_optional_mlx.py`).
+Recently Resolved
 
-Optional Improvements
-- write a minimal “started” run_health early (status "running", start_time) and then overwrite it at the end with "success" + outputs_written. That way even crashes leave something behind.
-- Emit a warning when `delta_pairs` references schemes not present in `quant_sim` (helps catch typos early).
-- Harden CLI release packaging against stale build artifacts:
-  - add a clean-build step before wheel/sdist creation so stale `build/lib/` contents cannot leak into packaged artifacts
-  - add an artifact-level smoke check that inspects the built wheel or installs it into a temp target and asserts `import scripts` fails while `import mlx_quant_toolkit.scripts.init_run` succeeds
+- Optional dependency packaging is cleanly split between base dependencies and capability-scoped extras.
+- `packed_split.projs` values are canonicalized through `parsing.proj_aliases`.
+- Unmapped proj canonicalization uncertainty is surfaced via `logs/proj_canonicalization_report.{parquet|csv}` and warning summaries.
+- `.npz` reading now uses a context manager.
+- `logs/run_health.json` summarizes scan/extraction/output state, including index-aware counts.
+- Run-level fallback visibility is exposed through `logs/run_health.json`.
+- `proj_group` captures are canonicalized via `parsing.proj_aliases`.
+- `model_path` supports single-file checkpoints via `_iter_weight_files`.
+- Relative quant metrics now support denominator-floor stabilization, with defaults wired through normal `init_run -> collect_data` usage and null treated as unset.
+- MLX quant compute dtype fallback behavior is hardened for no-`dtype` array runtimes, including fail-closed behavior for unsupported `bf16` paths.
+- CLI packaging is package-local under `mlx_quant_toolkit`, with stronger namespace-isolation coverage and more descriptive help text.
+- `build_tables.py` duplicate-delta cleanup is hardened across reruns, stale manifests, unrelated sidecars, malformed owned paths, and symlink containment.
+- `build_tables.py` now emits `logs/tables_failure.json` on hard failures and clears stale failure artifacts on later success.
+
