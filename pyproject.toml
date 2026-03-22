@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "The rationalist's loadout for intelligent mlx quantization"
 readme = "README.md"
 requires-python = ">=3.12.9"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "ml-dtypes>=0.5.4",
     "numpy>=2.3.5",

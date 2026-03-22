@@ -15,6 +15,7 @@ class DependencyContractTests(unittest.TestCase):
     def setUp(self):
         self.repo_root = Path(__file__).resolve().parents[1]
         self.pyproject_path = self.repo_root / "pyproject.toml"
+        self.license_path = self.repo_root / "LICENSE"
 
     def _load_pyproject_project_table(self):
         data = tomllib.loads(self.pyproject_path.read_text())
@@ -71,6 +72,19 @@ class DependencyContractTests(unittest.TestCase):
         plot_deps = {_normalize_dep_name(spec) for spec in optional["plot"]}
 
         self.assertEqual(all_deps, mlx_deps | parquet_deps | plot_deps)
+
+    def test_repo_ships_mit_license_text(self):
+        self.assertTrue(self.license_path.exists(), f"Missing repo license file: {self.license_path}")
+        text = self.license_path.read_text()
+        self.assertIn("MIT License", text)
+        self.assertIn("Permission is hereby granted, free of charge", text)
+
+    def test_pyproject_declares_mit_spdx_license_and_license_file(self):
+        project = self._load_pyproject_project_table()
+        self.assertEqual(project.get("license"), "MIT")
+        license_files = project.get("license-files", [])
+        self.assertIsInstance(license_files, list)
+        self.assertIn("LICENSE", license_files)
 
 
 if __name__ == "__main__":
