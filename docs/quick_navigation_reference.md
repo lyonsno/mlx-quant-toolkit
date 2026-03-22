@@ -34,7 +34,6 @@ custom_mlx_quant_tools/
 │   └── safetensors_index_handling.md  # Deep dive on index behavior
 ├── example_safetensors_folder_metadata_convention_variance/  # Test fixtures
 ├── tmp_model_npz/        # Temporary fixtures (gitignored)
-└── main.py               # Simple entry point (not the main pipeline)
 
 Key config files:
 ├── AGENTS.md             # Agent-specific rules (this file is for AI assistants)

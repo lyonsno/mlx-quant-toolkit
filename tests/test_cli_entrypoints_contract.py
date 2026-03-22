@@ -25,6 +25,7 @@ class CliEntrypointsContractTests(unittest.TestCase):
         self.pyproject_path = self.repo_root / "pyproject.toml"
         self.cli_module_path = self.repo_root / "mlx_quant_toolkit" / "cli.py"
         self.packaged_scripts_dir = self.repo_root / "mlx_quant_toolkit" / "scripts"
+        self.quick_nav_path = self.repo_root / "docs" / "quick_navigation_reference.md"
 
     def _load_pyproject_project_table(self):
         data = tomllib.loads(self.pyproject_path.read_text())
@@ -70,6 +71,17 @@ class CliEntrypointsContractTests(unittest.TestCase):
                 "mlx-quant-build-plots": "mlx_quant_toolkit.cli:build_plots_cli",
             },
         )
+
+    def test_repo_does_not_ship_placeholder_top_level_main_entrypoint(self):
+        main_path = self.repo_root / "main.py"
+        self.assertFalse(
+            main_path.exists(),
+            "Top-level main.py should be removed rather than implying a supported umbrella entrypoint",
+        )
+
+    def test_quick_navigation_reference_does_not_advertise_main_py_entrypoint(self):
+        text = self.quick_nav_path.read_text()
+        self.assertNotIn("main.py", text)
 
     def test_pyproject_declares_package_local_scripts_for_release_builds(self):
         data = tomllib.loads(self.pyproject_path.read_text())
