@@ -1696,6 +1696,38 @@ class BuildTablesContractTests(unittest.TestCase):
             error_info = payload.get("error", {})
             self.assertEqual(error_info.get("type"), "FileNotFoundError")
 
+    def test_build_tables_programmatic_main_nonzero_system_exit_writes_tables_failure_artifact(self):
+        mod = _load_module("build_tables_programmatic_system_exit_contract", self._build_tables_path())
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+
+            original_load_config = mod._load_config
+            old_argv = sys.argv
+            try:
+                mod._load_config = lambda _run_dir: (_ for _ in ()).throw(SystemExit("synthetic config failure"))
+                sys.argv = ["build_tables.py", "--run-dir", str(run_dir)]
+                with self.assertRaises(SystemExit) as raised:
+                    mod.main()
+            finally:
+                mod._load_config = original_load_config
+                sys.argv = old_argv
+
+            self.assertEqual(str(raised.exception), "synthetic config failure")
+
+            failure_path = run_dir / "logs" / "tables_failure.json"
+            self.assertTrue(
+                failure_path.exists(),
+                "Non-zero SystemExit through main() should emit tables_failure.json",
+            )
+            payload = json.loads(failure_path.read_text())
+            self._assert_tables_failure_payload_basics(payload, run_dir)
+
+            error_info = payload.get("error", {})
+            self.assertEqual(error_info.get("type"), "SystemExit")
+            self.assertEqual(error_info.get("message"), "synthetic config failure")
+            self.assertFalse((run_dir / "logs" / "tables_write_manifest.json").exists())
+
     def test_build_tables_duplicate_delta_cleanup_preserves_unrelated_table_sidecars(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir) / "run"
