@@ -1238,6 +1238,292 @@ class BuildTablesContractTests(unittest.TestCase):
             self.assertEqual(rows[0]["delta_w_rel_fro"], "")
             self.assertEqual(rows[0]["delta_w_rel_max"], "")
 
+    def test_build_tables_fails_fast_without_writing_outputs_when_quant_delta_base_keys_are_duplicated(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                output_format="csv",
+                compression=None,
+                delta_pairs=[
+                    {"name": "delta_ab", "a": "scheme_a", "b": "scheme_b"},
+                ],
+            )
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.15,
+                        "w_rel_max": 0.2,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        # CONTRACT: duplicate base keys for B_quant_deltas must not
+                        # silently collapse through first-value semantics.
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.31,
+                        "w_rel_max": 0.44,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_b",
+                        "w_rel_fro": 0.09,
+                        "w_rel_max": 0.12,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                ],
+            )
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+
+            # CONTRACT: duplicate delta base keys are treated as early validation
+            # errors, not as order-sensitive first-value collapses.
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("duplicate", output.lower())
+            self.assertIn("scheme_a", output)
+            self.assertIn("down_proj", output)
+            self.assertFalse(
+                (run_dir / "tables").exists(),
+                "Duplicate delta-key failures should happen before writing tables",
+            )
+            self.assertFalse(
+                (run_dir / "logs" / "tables_write_manifest.json").exists(),
+                "Duplicate delta-key failures should happen before writing tables manifests",
+            )
+
+    def test_build_tables_duplicate_quant_delta_key_failures_clear_stale_outputs_on_rerun(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                output_format="csv",
+                compression=None,
+                delta_pairs=[
+                    {"name": "delta_ab", "a": "scheme_a", "b": "scheme_b"},
+                ],
+            )
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+            self._write_quant_sim_csv(data_dir, self._sample_quant_rows())
+
+            self._run_build_tables(run_dir)
+
+            stale_table_paths = [
+                run_dir / "tables" / "A_weight_layer_summary.csv",
+                run_dir / "tables" / "A_weight_block4_summary.csv",
+                run_dir / "tables" / "A_weight_global_summary.csv",
+                run_dir / "tables" / "B_quant_layer_summary.csv",
+                run_dir / "tables" / "B_quant_block4_summary.csv",
+                run_dir / "tables" / "B_quant_global_summary.csv",
+                run_dir / "tables" / "B_quant_deltas.csv",
+            ]
+            manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+
+            for path in stale_table_paths:
+                self.assertTrue(path.exists(), f"Expected first successful build to write {path.name}")
+            self.assertTrue(manifest_path.exists(), "Expected first successful build to write tables manifest")
+
+            self._write_quant_sim_csv(
+                data_dir,
+                [
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.15,
+                        "w_rel_max": 0.2,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        # CONTRACT: on reruns, duplicate delta-key validation must
+                        # clear any stale prior tables/manifest instead of leaving a
+                        # previous successful build visible to downstream tooling.
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_a",
+                        "w_rel_fro": 0.31,
+                        "w_rel_max": 0.44,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                    {
+                        "derived_tensor": "layers.0.experts.0.down_proj.weight",
+                        "layer": 0,
+                        "proj": "down_proj",
+                        "expert_id": 0,
+                        "rows": 2,
+                        "cols": 2,
+                        "scheme": "scheme_b",
+                        "w_rel_fro": 0.09,
+                        "w_rel_max": 0.12,
+                        "scale_mean": 0.0,
+                        "scale_max": 0.0,
+                        "bias_mean": 0.0,
+                        "bias_max": 0.0,
+                        "error": "",
+                    },
+                ],
+            )
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("duplicate", output.lower())
+            self.assertIn("scheme_a", output)
+            self.assertIn("down_proj", output)
+            for path in stale_table_paths:
+                self.assertFalse(
+                    path.exists(),
+                    f"Duplicate delta-key reruns should clear stale table output {path.name}",
+                )
+            self.assertFalse(
+                manifest_path.exists(),
+                "Duplicate delta-key reruns should clear stale tables manifest",
+            )
+
+    def test_build_tables_missing_input_rerun_preserves_previous_success_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "run"
+            data_dir = run_dir / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self._write_config(
+                run_dir,
+                output_format="csv",
+                compression=None,
+                delta_pairs=[
+                    {"name": "delta_ab", "a": "scheme_a", "b": "scheme_b"},
+                ],
+            )
+            self._write_matrix_stats_csv(data_dir, self._sample_matrix_rows())
+            self._write_quant_sim_csv(data_dir, self._sample_quant_rows())
+
+            self._run_build_tables(run_dir)
+
+            preserved_table_paths = [
+                run_dir / "tables" / "A_weight_layer_summary.csv",
+                run_dir / "tables" / "A_weight_block4_summary.csv",
+                run_dir / "tables" / "A_weight_global_summary.csv",
+                run_dir / "tables" / "B_quant_layer_summary.csv",
+                run_dir / "tables" / "B_quant_block4_summary.csv",
+                run_dir / "tables" / "B_quant_global_summary.csv",
+                run_dir / "tables" / "B_quant_deltas.csv",
+            ]
+            manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+            first_manifest = manifest_path.read_text()
+
+            for path in preserved_table_paths:
+                self.assertTrue(path.exists(), f"Expected first successful build to write {path.name}")
+            self.assertTrue(manifest_path.exists(), "Expected first successful build to write tables manifest")
+
+            (data_dir / "quant_sim.csv").unlink()
+
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "default"
+            result = self._run(
+                [
+                    sys.executable,
+                    str(self.repo_root / "scripts" / "build_tables.py"),
+                    "--run-dir",
+                    str(run_dir),
+                ],
+                env=env,
+                check=False,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+
+            # CONTRACT: a rerun that fails before new tables are validated/written
+            # must not wipe the previous successful table set.
+            self.assertNotEqual(result.returncode, 0, output)
+            self.assertIn("quant_sim", output)
+            for path in preserved_table_paths:
+                self.assertTrue(
+                    path.exists(),
+                    f"Input-read failures should preserve previous successful table output {path.name}",
+                )
+            self.assertTrue(
+                manifest_path.exists(),
+                "Input-read failures should preserve previous successful tables manifest",
+            )
+            self.assertEqual(
+                manifest_path.read_text(),
+                first_manifest,
+                "Input-read failures should leave the previous tables manifest unchanged",
+            )
+
     def test_build_tables_quant_error_rows_are_represented_in_b_summaries(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             run_dir = Path(tmp_dir) / "run"

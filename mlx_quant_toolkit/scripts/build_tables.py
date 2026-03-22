@@ -12,6 +12,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import shutil
 from typing import Any, Dict, List
 
 import pandas as pd
@@ -232,6 +233,15 @@ def _write_df(df: pd.DataFrame, path: Path, fmt: str, compression: str | None) -
     }
 
 
+def _clear_previous_table_outputs(run_dir: Path) -> None:
+    tables_dir = run_dir / "tables"
+    if tables_dir.exists():
+        shutil.rmtree(tables_dir)
+    manifest_path = run_dir / "logs" / "tables_write_manifest.json"
+    if manifest_path.exists():
+        manifest_path.unlink()
+
+
 def _load_config(run_dir: Path) -> Dict[str, Any]:
     cfg_path = run_dir / "analysis_config.json"
     return json.loads(cfg_path.read_text())
@@ -287,6 +297,54 @@ def _agg_with_funcs(df: pd.DataFrame, group_cols: List[str], value_cols: List[st
         for c in grouped.columns
     ]
     return grouped
+
+
+def _validate_quant_delta_base_keys(
+    qs: pd.DataFrame,
+    delta_pairs: List[Dict[str, Any]],
+    delta_metric_values: List[str],
+) -> None:
+    if not delta_pairs or not delta_metric_values:
+        return
+
+    if "scheme" not in qs.columns:
+        return
+
+    delta_scheme_names = {
+        str(name)
+        for pair in delta_pairs
+        for name in (pair.get("a"), pair.get("b"))
+        if name is not None
+    }
+    if not delta_scheme_names:
+        return
+
+    base_index = ["derived_tensor", "layer", "block4", "proj", "expert_id", "rows", "cols"]
+    relevant = qs[qs["scheme"].astype(str).isin(delta_scheme_names)].copy()
+    if relevant.empty:
+        return
+
+    counts = (
+        relevant.groupby(base_index + ["scheme"], dropna=False)
+        .size()
+        .reset_index(name="count")
+    )
+    duplicates = counts[counts["count"] > 1].reset_index(drop=True)
+    if duplicates.empty:
+        return
+
+    duplicate_examples = []
+    for row in duplicates.head(3).to_dict(orient="records"):
+        duplicate_examples.append(
+            "scheme={scheme}, proj={proj}, layer={layer}, expert_id={expert_id}, derived_tensor={derived_tensor}, count={count}".format(
+                **row
+            )
+        )
+    raise ValueError(
+        "duplicate quant delta base keys detected; B_quant_deltas requires unique "
+        "(derived_tensor, layer, block4, proj, expert_id, rows, cols, scheme) rows. "
+        f"Examples: {'; '.join(duplicate_examples)}"
+    )
 
 
 def main():
@@ -346,6 +404,17 @@ def main():
         ms["block4"] = ms["layer"].floordiv(4)
     if "block4" not in qs.columns:
         qs["block4"] = qs["layer"].floordiv(4)
+
+    delta_pairs = cfg.get("delta_pairs", [])
+    delta_metric_values = [c for c in ["w_rel_fro", "w_rel_max"] if c in qs.columns]
+    try:
+        _validate_quant_delta_base_keys(qs, delta_pairs, delta_metric_values)
+    except ValueError:
+        # CONTRACT: duplicate delta-key validation is an early-fail path that
+        # must invalidate stale previous tables, but input/read failures that
+        # happen before this point should preserve the last successful outputs.
+        _clear_previous_table_outputs(run_dir)
+        raise
 
     # -------- A: weight stats summaries --------
     stat_cols = [
@@ -422,13 +491,11 @@ def main():
     )
 
     # -------- deltas (scheme A - scheme B) --------
-    delta_pairs = cfg.get("delta_pairs", [])
     if delta_pairs:
         base_index = ["derived_tensor", "layer", "block4", "proj", "expert_id", "rows", "cols"]
         for col in base_index:
             if col not in qs.columns:
                 qs[col] = pd.NA
-        delta_metric_values = [c for c in ["w_rel_fro", "w_rel_max"] if c in qs.columns]
         if delta_metric_values:
             pivot = qs.pivot_table(
                 index=base_index,
