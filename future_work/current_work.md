@@ -35,3 +35,6 @@ Recently Resolved (doc drift cleanup)
 Optional Improvements
 - write a minimal “started” run_health early (status "running", start_time) and then overwrite it at the end with "success" + outputs_written. That way even crashes leave something behind.
 - Emit a warning when `delta_pairs` references schemes not present in `quant_sim` (helps catch typos early).
+- Harden CLI release packaging against stale build artifacts:
+  - add a clean-build step before wheel/sdist creation so stale `build/lib/` contents cannot leak into packaged artifacts
+  - add an artifact-level smoke check that inspects the built wheel or installs it into a temp target and asserts `import scripts` fails while `import mlx_quant_toolkit.scripts.init_run` succeeds

@@ -95,21 +95,33 @@ Pattern: import script via `importlib.util.spec_from_file_location`, monkeypatch
 
 ### Quick start
 ```bash
+# Optional one-time install for the packaged CLI
+uv tool install -e .
+
 # 1. Initialize a run
-uv run python scripts/init_run.py --root ./runs --model-id test-model --run-name test-run --model-path /path/to/model
+mlx-quant-init --root ./runs --model-id test-model --run-name test-run --model-path /path/to/model
 
 # 2. Edit runs/test-model/test-run/analysis_config.json (customize extract_rules, etc.)
 
 # 3. Run data collection
-uv run python scripts/collect_data.py --run-dir ./runs/test-model/test-run
+mlx-quant-collect --run-dir ./runs/test-model/test-run
 
 # 4. Build tables
-uv run python scripts/build_tables.py --run-dir ./runs/test-model/test-run
+mlx-quant-build-tables --run-dir ./runs/test-model/test-run
 
 # 5. Optional: build baseline plots
-uv run python scripts/build_plots.py --run-dir ./runs/test-model/test-run
+mlx-quant-build-plots --run-dir ./runs/test-model/test-run
 
 # 6. Inspect outputs in runs/test-model/test-run/{data,tables,plots,logs}
+```
+
+Equivalent direct script usage from a repo checkout:
+
+```bash
+uv run python scripts/init_run.py --root ./runs --model-id test-model --run-name test-run --model-path /path/to/model
+uv run python scripts/collect_data.py --run-dir ./runs/test-model/test-run
+uv run python scripts/build_tables.py --run-dir ./runs/test-model/test-run
+uv run python scripts/build_plots.py --run-dir ./runs/test-model/test-run
 ```
 
 ### Running tests

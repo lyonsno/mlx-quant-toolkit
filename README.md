@@ -17,10 +17,19 @@ Proj canonicalization uncertainty is now surfaced explicitly:
 
 ## Quickstart
 
+If you install the package as a tool, the preferred command names are:
+
+- `mlx-quant-init`
+- `mlx-quant-collect`
+- `mlx-quant-build-tables`
+- `mlx-quant-build-plots`
+
+Equivalent direct script usage from a repo checkout still works too.
+
 1) Initialize a run directory and edit the config template:
 
 ```bash
-python scripts/init_run.py \
+mlx-quant-init \
   --root ./runs \
   --model-id <model> \
   --run-name <run> \
@@ -30,24 +39,33 @@ python scripts/init_run.py \
 2) Collect raw stats (+ optional quant sim):
 
 ```bash
-python scripts/collect_data.py --run-dir ./runs/<model>/<run>
+mlx-quant-collect --run-dir ./runs/<model>/<run>
 ```
 
 Optional: override the model path at invocation time (captured in `logs/run_context.json`):
 
 ```bash
-python scripts/collect_data.py --run-dir ./runs/<model>/<run> --model-path /path/to/model
+mlx-quant-collect --run-dir ./runs/<model>/<run> --model-path /path/to/model
 ```
 
 3) Build summary tables:
 
 ```bash
-python scripts/build_tables.py --run-dir ./runs/<model>/<run>
+mlx-quant-build-tables --run-dir ./runs/<model>/<run>
 ```
 
 4) (Optional) Build baseline plots from summary tables:
 
 ```bash
+mlx-quant-build-plots --run-dir ./runs/<model>/<run>
+```
+
+Equivalent direct script workflow:
+
+```bash
+python scripts/init_run.py --root ./runs --model-id <model> --run-name <run> --model-path /path/to/model
+python scripts/collect_data.py --run-dir ./runs/<model>/<run>
+python scripts/build_tables.py --run-dir ./runs/<model>/<run>
 python scripts/build_plots.py --run-dir ./runs/<model>/<run>
 ```
 
@@ -59,6 +77,9 @@ python scripts/build_plots.py --run-dir ./runs/<model>/<run>
 
 Common setups:
 
+- Using the installable CLI with `uv`:
+  - `uv tool install -e .`
+  - This exposes `mlx-quant-init`, `mlx-quant-collect`, `mlx-quant-build-tables`, and `mlx-quant-build-plots`.
 - Using `uv` (recommended if you already use it): `uv sync`
 - Using `venv` + pip:
   - `python -m venv .venv`

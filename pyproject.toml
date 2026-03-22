@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "mlx-quant-toolkit"
 version = "0.1.0"
@@ -10,6 +14,12 @@ dependencies = [
     "pandas>=2.3.3",
     "safetensors>=0.7.0",
 ]
+
+[project.scripts]
+mlx-quant-init = "mlx_quant_toolkit.cli:init_run_cli"
+mlx-quant-collect = "mlx_quant_toolkit.cli:collect_data_cli"
+mlx-quant-build-tables = "mlx_quant_toolkit.cli:build_tables_cli"
+mlx-quant-build-plots = "mlx_quant_toolkit.cli:build_plots_cli"
 
 [project.optional-dependencies]
 mlx = [
@@ -29,3 +39,6 @@ all = [
     "pyarrow>=22.0.0",
     "matplotlib>=3.10.0",
 ]
+
+[tool.setuptools]
+packages = ["mlx_quant_toolkit", "mlx_quant_toolkit.scripts"]
