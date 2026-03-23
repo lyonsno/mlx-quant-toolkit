@@ -230,6 +230,37 @@ def _write_run_failure_artifact(exc: BaseException, ctx: Dict[str, Any]) -> None
         pass
 
 
+def _write_run_health_error_artifact(exc: BaseException, ctx: Dict[str, Any]) -> None:
+    run_dir_raw = ctx.get("run_dir")
+    if run_dir_raw is None:
+        return
+
+    run_dir = Path(run_dir_raw)
+    manifest = ctx.get("manifest")
+    manifest_dict = manifest if isinstance(manifest, dict) else {}
+
+    payload: Dict[str, Any] = {
+        "generated_at": _utc_now_iso(),
+        "status": "error",
+        "run": {
+            "run_dir": _resolve_path_str(run_dir),
+            "model_id": manifest_dict.get("model_id"),
+            "run_name": manifest_dict.get("run_name"),
+            "created_at": manifest_dict.get("created_at"),
+        },
+        "error": {
+            "type": type(exc).__name__,
+            "message": _exception_message(exc),
+        },
+    }
+
+    try:
+        _write_json(payload, run_dir / "logs" / "run_health.json")
+    except Exception:
+        # Best effort only: failing to write error-health metadata should not replace the original error.
+        pass
+
+
 def _clear_run_failure_artifact(run_dir: Path) -> None:
     try:
         (run_dir / "logs" / "run_failure.json").unlink(missing_ok=True)
@@ -1264,9 +1295,11 @@ def main() -> None:
         _main_impl(args, failure_ctx)
     except SystemExit as exc:
         if _system_exit_is_error(exc):
+            _write_run_health_error_artifact(exc, failure_ctx)
             _write_run_failure_artifact(exc, failure_ctx)
         raise
     except Exception as exc:
+        _write_run_health_error_artifact(exc, failure_ctx)
         _write_run_failure_artifact(exc, failure_ctx)
         raise
 

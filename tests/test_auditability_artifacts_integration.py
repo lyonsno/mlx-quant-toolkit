@@ -209,6 +209,16 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
     def _assert_no_run_failure_artifact(self, run_dir: Path) -> None:
         self.assertFalse((run_dir / "logs" / "run_failure.json").exists())
 
+    def _assert_run_health_payload_basics(self, payload: dict, run_dir: Path) -> None:
+        self._assert_required_keys_subset(
+            payload,
+            {"generated_at", "status", "run"},
+            "run_health",
+        )
+        run_info = payload.get("run", {})
+        self.assertIsInstance(run_info, dict)
+        self.assertEqual(run_info.get("run_dir"), str(run_dir.resolve()))
+
     def test_collect_data_writes_run_context_and_write_manifest_with_cli_override_and_index_active(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -612,6 +622,31 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
             self.assertIsNone(model_path_info.get("resolved"))
             self.assertIsNone(model_path_info.get("source"))
 
+    def test_collect_data_hard_fail_invalid_config_json_writes_run_health_error_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            run_dir = self._init_run_dir(tmp_path, "invalid-config-json-run-health-hard-fail")
+            (run_dir / "analysis_config.json").write_text("{")
+
+            result = self._run_collect(run_dir, None, self._env(), check=False)
+            self.assertNotEqual(result.returncode, 0)
+
+            health_path = run_dir / "logs" / "run_health.json"
+            self.assertTrue(health_path.exists())
+
+            payload = json.loads(health_path.read_text())
+            self._assert_run_health_payload_basics(payload, run_dir)
+            self.assertEqual(payload.get("status"), "error")
+
+            error_info = payload.get("error", {})
+            self._assert_required_keys_subset(
+                error_info,
+                {"type", "message"},
+                "run_health.error",
+            )
+            self.assertEqual(error_info.get("type"), "JSONDecodeError")
+            self.assertIn("expecting property name enclosed", str(error_info.get("message")).lower())
+
     def test_collect_data_hard_fail_strict_index_writes_run_failure_with_index_context(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -950,3 +985,43 @@ class AuditabilityArtifactsIntegrationTests(unittest.TestCase):
 
             self._assert_no_run_failure_artifact(run_dir)
             self.assertTrue((run_dir / "logs" / "run_context.json").exists())
+
+    def test_collect_data_success_overwrites_error_run_health_artifact_from_prior_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            model_dir = tmp_path / "model"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            np.savez(
+                model_dir / "shard1.npz",
+                **{"layers.0.experts.0.up_proj.weight": np.arange(4, dtype=np.float32).reshape(2, 2)},
+            )
+
+            run_name = "stale-run-health-error-then-success"
+            run_dir = tmp_path / run_name
+
+            first_result = self._run_collect(run_dir, None, self._env(), check=False)
+            self.assertNotEqual(first_result.returncode, 0)
+
+            first_health_path = run_dir / "logs" / "run_health.json"
+            self.assertTrue(first_health_path.exists())
+            first_health = json.loads(first_health_path.read_text())
+            self._assert_run_health_payload_basics(first_health, run_dir)
+            self.assertEqual(first_health.get("status"), "error")
+
+            run_dir = self._init_run_dir(tmp_path, run_name)
+            self._write_config(
+                run_dir,
+                model_dir,
+                use_index=False,
+                output_format="csv",
+                compression=None,
+            )
+
+            self._run_collect(run_dir, None, self._env(), check=True)
+
+            second_health_path = run_dir / "logs" / "run_health.json"
+            self.assertTrue(second_health_path.exists())
+            second_health = json.loads(second_health_path.read_text())
+            self._assert_run_health_payload_basics(second_health, run_dir)
+            self.assertEqual(second_health.get("status"), "success")
+            self.assertIn("outputs_written", second_health)
