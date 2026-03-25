@@ -85,6 +85,15 @@ Common setups:
   - `python -m venv .venv`
   - `./.venv/bin/pip install -e .`
 
+Release smoke in agent/restricted environments:
+
+- `make release-smoke` uses `./.venv/bin/python scripts/release_smoke.py --uv-cache-dir /tmp/uv-cache`.
+- The release smoke now passes its selected interpreter through to `uv build --python ... --no-build-isolation`, so the chosen interpreter must have `setuptools` available locally.
+- In a fresh repo-local `.venv`, bootstrap that once with:
+  - `./.venv/bin/python -m ensurepip --upgrade`
+  - `./.venv/bin/python -m pip install setuptools`
+- After that, `make release-smoke` should work in typical agent/sandbox environments without needing an extra `UV_PYTHON=...` override.
+
 Optional dependencies (runtime behavior):
 
 - `pyproject.toml` keeps `mlx`, `pyarrow`, and plotting dependencies as install extras so the base pipeline install stays portable.

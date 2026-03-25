@@ -120,6 +120,7 @@ Additional pre-PR rules tied to the matrix:
 
 - Unit tests: `uv run make test` (fallback: `make test`; verbose: `make verbose-test`).
 - Specific module: `uv run python -m unittest tests.test_split_along_axis`.
+- If you touch release packaging or `make release-smoke`, check the README note about agent/restricted environments first; the selected interpreter must have local `setuptools` available for the non-isolated build path.
 - Manual pipeline:
   - `python scripts/init_run.py --root ./runs --model-id <model> --run-name <run> --model-path /path/to/model`
   - `python scripts/collect_data.py --run-dir ./runs/<model>/<run>`
