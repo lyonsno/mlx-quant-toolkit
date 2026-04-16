@@ -242,6 +242,7 @@ class ReleaseSmokeContractTests(unittest.TestCase):
             env = mod._cli_surface_env_with_dependencies(
                 dict(os.environ),
                 prefix_purelib,
+                install_prefix,
                 [str(runtime_site)],
             )
             result = subprocess.run(
@@ -295,6 +296,7 @@ class ReleaseSmokeContractTests(unittest.TestCase):
             env = mod._cli_surface_env_with_dependencies(
                 dict(os.environ),
                 prefix_purelib,
+                install_prefix,
                 [str(prefix_purelib)],
             )
             with self.assertRaises(PermissionError):

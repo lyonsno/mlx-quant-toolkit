@@ -170,16 +170,15 @@ def _python_runtime_site_packages(
     return ordered
 
 
-def _cli_pythonpath(prefix_purelib: Path, runtime_site_packages: Sequence[str]) -> str:
-    guard_dir = _ensure_cli_guard_dir(prefix_purelib)
+def _cli_pythonpath(prefix_purelib: Path, install_prefix: Path, runtime_site_packages: Sequence[str]) -> str:
+    guard_dir = _ensure_cli_guard_dir(install_prefix)
     entries = [str(guard_dir), str(prefix_purelib)] + [
         path for path in runtime_site_packages if path != str(prefix_purelib)
     ]
     return os.pathsep.join(entries)
 
 
-def _ensure_cli_guard_dir(prefix_purelib: Path) -> Path:
-    install_prefix = prefix_purelib.parents[2]
+def _ensure_cli_guard_dir(install_prefix: Path) -> Path:
     guard_dir = install_prefix / ".release_smoke_guard"
     guard_dir.mkdir(parents=True, exist_ok=True)
     guard_file = guard_dir / "sitecustomize.py"
@@ -203,10 +202,11 @@ def _ensure_cli_guard_dir(prefix_purelib: Path) -> Path:
 def _cli_surface_env_with_dependencies(
     base_env: Dict[str, str],
     prefix_purelib: Path,
+    install_prefix: Path,
     runtime_site_packages: Sequence[str],
 ) -> Dict[str, str]:
     env = _installed_surface_env(base_env)
-    env["PYTHONPATH"] = _cli_pythonpath(prefix_purelib, runtime_site_packages)
+    env["PYTHONPATH"] = _cli_pythonpath(prefix_purelib, install_prefix, runtime_site_packages)
     env["PYTHONNOUSERSITE"] = "1"
     env["MLX_RELEASE_SMOKE_PREFIX_PURELIB"] = str(prefix_purelib)
     return env
@@ -337,6 +337,7 @@ def run_release_smoke(
                     cli_surface_env = _cli_surface_env_with_dependencies(
                         env,
                         purelib,
+                        install_prefix,
                         _python_runtime_site_packages(python_executable, installed_surface_env, out_dir.parent),
                     )
                 assert cli_surface_env is not None
