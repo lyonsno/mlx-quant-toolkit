@@ -101,12 +101,6 @@ def _installed_surface_env(base_env: Dict[str, str]) -> Dict[str, str]:
     }
 
 
-def _cli_surface_env(base_env: Dict[str, str], purelib: Path) -> Dict[str, str]:
-    env = _installed_surface_env(base_env)
-    env["PYTHONPATH"] = str(purelib)
-    return env
-
-
 def _stage_project_snapshot(project_root: Path, staged_repo: Path) -> None:
     git_ls_files = subprocess.run(
         ["git", "ls-files", "-z"],
